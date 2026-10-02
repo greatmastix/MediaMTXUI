@@ -277,16 +277,26 @@ func (s *Server) loginCode(w http.ResponseWriter, r *http.Request) {
 	}
 	audit.Set(ctx, "", u.Username, nil)
 	audit.Actor(ctx, u.Username, &u.ID)
+	// Wrong codes count per account (not only per ticket): whoever has the password cannot get fresh tickets to
+	// keep guessing codes.
+	attempt, wait := s.lockout.Begin(auth.AccountKey(u.ID))
+	if attempt == nil {
+		writeError(w, http.StatusTooManyRequests, "locked", fmt.Sprintf("Too many wrong codes. Try again in %d minutes.", (retryAfter(w, wait)+59)/60))
+		return
+	}
+	defer attempt.Abandon()
 	how, err := s.checkCode(ctx, u, body.Code)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "The code cannot be checked.")
 		return
 	}
 	if how == "" {
+		attempt.Fail()
 		audit.Set(ctx, "", "", map[string]any{"result": "wrong code"})
 		writeError(w, http.StatusUnauthorized, "invalid_code", "Wrong or already used code.")
 		return
 	}
+	attempt.Succeed()
 	s.flows.mu.Lock()
 	delete(s.flows.tickets, body.Ticket)
 	s.flows.mu.Unlock()
@@ -419,12 +429,11 @@ func (s *Server) stepUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit.Set(ctx, "auth.step_up", cur.user.Username, nil)
-	key := auth.LockKey(cur.user.Username)
-	if locked, wait := s.lockout.Locked(key); locked {
-		writeError(w, http.StatusTooManyRequests, "locked",
-			fmt.Sprintf("Too many failed attempts. Try again in %d minutes.", (retryAfter(w, wait)+59)/60))
+	attempt, ok := s.accountAttempt(w, cur.user.ID)
+	if !ok {
 		return
 	}
+	defer attempt.Abandon()
 	how := ""
 	switch {
 	case body.Code != "":
@@ -435,7 +444,7 @@ func (s *Server) stepUp(w http.ResponseWriter, r *http.Request) {
 		}
 	case body.Password != "":
 		good, _, err := s.d.Hasher.Verify(ctx, cur.user.PasswordHash, body.Password)
-		if err != nil && ctx.Err() != nil {
+		if hashBusy(ctx, err) {
 			writeError(w, http.StatusServiceUnavailable, "busy", "The server is busy. Try again.")
 			return
 		}
@@ -444,12 +453,12 @@ func (s *Server) stepUp(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if how == "" {
-		s.lockout.Fail(key)
+		attempt.Fail()
 		audit.Set(ctx, "", "", map[string]any{"result": "failed"})
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "That is not right.")
 		return
 	}
-	s.lockout.Succeed(key)
+	attempt.Succeed()
 	s.verified(w, r, cur, how)
 }
 

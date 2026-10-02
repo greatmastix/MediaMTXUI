@@ -102,6 +102,7 @@ operations:
     area: Connections
     phase: 2
     access: operator
+    redact: [query] # RTMP and others carry credentials in the query (user=…&pass=…)
     note: Includes client addresses.
   - id: hlssessionsGet
     method: GET
@@ -109,6 +110,7 @@ operations:
     area: Connections
     phase: 2
     access: operator
+    redact: [query] # RTMP and others carry credentials in the query (user=…&pass=…)
   - id: hlssessionsKick
     method: POST
     path: /v3/hls/sessions/kick/{id}
@@ -176,12 +178,14 @@ operations:
     area: Connections
     phase: 2
     access: operator
+    redact: [query] # RTMP and others carry credentials in the query (user=…&pass=…)
   - id: rtspSessionsGet
     method: GET
     path: /v3/rtsp/sessions/get/{id}
     area: Connections
     phase: 2
     access: operator
+    redact: [query] # RTMP and others carry credentials in the query (user=…&pass=…)
   - id: rtspSessionsKick
     method: POST
     path: /v3/rtsp/sessions/kick/{id}
@@ -209,12 +213,14 @@ operations:
     area: Connections
     phase: 2
     access: operator
+    redact: [query] # RTMP and others carry credentials in the query (user=…&pass=…)
   - id: rtspsSessionsGet
     method: GET
     path: /v3/rtsps/sessions/get/{id}
     area: Connections
     phase: 2
     access: operator
+    redact: [query] # RTMP and others carry credentials in the query (user=…&pass=…)
   - id: rtspsSessionsKick
     method: POST
     path: /v3/rtsps/sessions/kick/{id}
@@ -229,12 +235,14 @@ operations:
     area: Connections
     phase: 2
     access: operator
+    redact: [query] # RTMP and others carry credentials in the query (user=…&pass=…)
   - id: rtmpConnectionsGet
     method: GET
     path: /v3/rtmp/conns/get/{id}
     area: Connections
     phase: 2
     access: operator
+    redact: [query] # RTMP and others carry credentials in the query (user=…&pass=…)
   - id: rtmpConnsKick
     method: POST
     path: /v3/rtmp/conns/kick/{id}
@@ -249,12 +257,14 @@ operations:
     area: Connections
     phase: 2
     access: operator
+    redact: [query] # RTMP and others carry credentials in the query (user=…&pass=…)
   - id: rtmpsConnectionsGet
     method: GET
     path: /v3/rtmps/conns/get/{id}
     area: Connections
     phase: 2
     access: operator
+    redact: [query] # RTMP and others carry credentials in the query (user=…&pass=…)
   - id: rtmpsConnsKick
     method: POST
     path: /v3/rtmps/conns/kick/{id}
@@ -269,12 +279,14 @@ operations:
     area: Connections
     phase: 2
     access: operator
+    redact: [query] # RTMP and others carry credentials in the query (user=…&pass=…)
   - id: srtConnsGet
     method: GET
     path: /v3/srt/conns/get/{id}
     area: Connections
     phase: 2
     access: operator
+    redact: [query] # RTMP and others carry credentials in the query (user=…&pass=…)
   - id: srtConnsKick
     method: POST
     path: /v3/srt/conns/kick/{id}
@@ -289,12 +301,14 @@ operations:
     area: Connections
     phase: 2
     access: operator
+    redact: [query] # RTMP and others carry credentials in the query (user=…&pass=…)
   - id: webrtcSessionsGet
     method: GET
     path: /v3/webrtc/sessions/get/{id}
     area: Connections
     phase: 2
     access: operator
+    redact: [query] # RTMP and others carry credentials in the query (user=…&pass=…)
   - id: webrtcSessionsKick
     method: POST
     path: /v3/webrtc/sessions/kick/{id}
@@ -309,6 +323,7 @@ operations:
     area: Connections
     phase: 2
     access: operator
+    redact: [query] # RTMP and others carry credentials in the query (user=…&pass=…)
     note: MoQ is off in the seed config; the list is empty unless an admin enables it.
   - id: moqSessionsGet
     method: GET
@@ -316,6 +331,7 @@ operations:
     area: Connections
     phase: 2
     access: operator
+    redact: [query] # RTMP and others carry credentials in the query (user=…&pass=…)
   - id: moqSessionsKick
     method: POST
     path: /v3/moq/sessions/kick/{id}

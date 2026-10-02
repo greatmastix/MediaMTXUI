@@ -2,6 +2,7 @@ package auth
 
 import (
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -74,6 +75,7 @@ type Lockout struct {
 
 type lockEntry struct {
 	failures    int
+	pending     int // attempts begun and not yet ended (Begin)
 	first       time.Time
 	lockedUntil time.Time
 }
@@ -85,6 +87,102 @@ func NewLockout(threshold int, duration time.Duration) *Lockout {
 
 // LockKey normalizes a username into a lockout key.
 func LockKey(username string) string { return strings.ToLower(strings.TrimSpace(username)) }
+
+// SignInKey is the lockout key of anonymous sign-in attempts: a username from one client address (RateKey). Keyed by
+// the username alone, anyone could keep a real user locked out from everywhere; per address, guessing from many
+// addresses is still bounded by each address's rate limit and lockout.
+func SignInKey(username, rateKey string) string { return LockKey(username) + "\x00" + rateKey }
+
+// AccountKey is the lockout key of checks a signed-in user makes (step-up, the password on the account page, the
+// second sign-in step): per account, apart from anonymous sign-ins, so a stranger cannot lock them.
+func AccountKey(userID int64) string { return "account\x00" + strconv.FormatInt(userID, 10) }
+
+// Attempt is one attempt reserved with Begin. Exactly one of Fail, Succeed or Abandon ends it; the others then do
+// nothing, so `defer a.Abandon()` covers the early returns.
+type Attempt struct {
+	l    *Lockout
+	key  string
+	done bool
+}
+
+// Begin reserves an attempt for key, or refuses (nil, with how long to wait) while the key is locked or while the
+// attempts in flight could already lock it. Checking and failing separately would let parallel requests, all past the
+// check while the first ones are still hashing, make far more guesses than the threshold.
+func (l *Lockout) Begin(key string) (*Attempt, time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	e, ok := l.entries[key]
+	if !ok {
+		if len(l.entries) >= maxKeys {
+			l.sweep(now)
+			if len(l.entries) >= maxKeys {
+				return nil, time.Minute
+			}
+		}
+		e = &lockEntry{}
+		l.entries[key] = e
+	}
+	if left := e.lockedUntil.Sub(now); left > 0 {
+		return nil, left
+	}
+	if e.failures > 0 && now.Sub(e.first) > l.duration {
+		e.failures = 0
+	}
+	if e.failures+e.pending >= l.threshold {
+		return nil, 2 * time.Second
+	}
+	e.pending++
+	return &Attempt{l: l, key: key}, 0
+}
+
+func (a *Attempt) end() *lockEntry {
+	if a == nil || a.done {
+		return nil
+	}
+	a.done = true
+	e := a.l.entries[a.key]
+	if e != nil && e.pending > 0 {
+		e.pending--
+	}
+	return e
+}
+
+// Fail ends the attempt as a failure and reports whether the key is now locked.
+func (a *Attempt) Fail() bool {
+	if a == nil || a.done {
+		return false
+	}
+	a.l.mu.Lock()
+	defer a.l.mu.Unlock()
+	a.end()
+	return a.l.failLocked(a.key)
+}
+
+// Succeed ends the attempt as a success: the key's failures are forgotten.
+func (a *Attempt) Succeed() {
+	if a == nil || a.done {
+		return
+	}
+	a.l.mu.Lock()
+	defer a.l.mu.Unlock()
+	if e := a.end(); e != nil {
+		e.failures = 0
+		if e.pending == 0 && !e.lockedUntil.After(a.l.now()) {
+			delete(a.l.entries, a.key)
+		}
+	}
+}
+
+// Abandon ends the attempt without an outcome (the server was busy, an internal error).
+func (a *Attempt) Abandon() {
+	if a == nil || a.done {
+		return
+	}
+	a.l.mu.Lock()
+	defer a.l.mu.Unlock()
+	a.end()
+}
 
 // Locked reports whether key is locked and for how much longer.
 func (l *Lockout) Locked(key string) (bool, time.Duration) {
@@ -104,6 +202,10 @@ func (l *Lockout) Locked(key string) (bool, time.Duration) {
 func (l *Lockout) Fail(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.failLocked(key)
+}
+
+func (l *Lockout) failLocked(key string) bool {
 	now := l.now()
 	e, ok := l.entries[key]
 	if !ok {
@@ -134,7 +236,7 @@ func (l *Lockout) Succeed(key string) {
 
 func (l *Lockout) sweep(now time.Time) {
 	for k, e := range l.entries {
-		if now.After(e.lockedUntil) && now.Sub(e.first) > l.duration {
+		if e.pending == 0 && now.After(e.lockedUntil) && (e.failures == 0 || now.Sub(e.first) > l.duration) {
 			delete(l.entries, k)
 		}
 	}

@@ -96,6 +96,12 @@ func (r *Recorder) Middleware(actor func(*http.Request) (string, *int64)) func(h
 			if name == "" {
 				name, id = actor(req)
 			}
+			// Anonymous requests are recorded only when the handler named the action (sign-in, setup, joining):
+			// anyone on the internet can send POSTs, and the log is append-only, so a generic entry for each would let
+			// them fill the disk.
+			if name == "" && e.action == "" {
+				return
+			}
 			if name == "" {
 				name = "anonymous"
 			}
@@ -113,7 +119,7 @@ func (r *Recorder) Middleware(actor func(*http.Request) (string, *int64)) func(h
 			if a := clientip.From(req.Context()).IP; a.IsValid() {
 				ip = a.String()
 			}
-			r.Record(req.Context(), store.AuditEvent{Actor: name, ActorUserID: id, IP: ip, Action: action, Target: e.target, Details: details})
+			r.Record(req.Context(), store.AuditEvent{Actor: clip(name), ActorUserID: id, IP: ip, Action: action, Target: clip(e.target), Details: clipDetails(details)})
 		})
 	}
 }
@@ -138,3 +144,22 @@ func (s *statusRecorder) Write(b []byte) (int, error) {
 
 // Unwrap lets http.ResponseController reach the underlying writer.
 func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+// maxField bounds a text field of an entry, so no request can make one large.
+const maxField = 256
+
+func clip(s string) string {
+	if len(s) <= maxField {
+		return s
+	}
+	return s[:maxField] + "…"
+}
+
+func clipDetails(d map[string]any) map[string]any {
+	for k, v := range d {
+		if s, ok := v.(string); ok {
+			d[k] = clip(s)
+		}
+	}
+	return d
+}

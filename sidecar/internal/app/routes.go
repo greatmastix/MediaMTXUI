@@ -153,10 +153,12 @@ func (s *Server) Public() http.Handler {
 		s.handle(api, http.MethodGet, "/v1/config/snapshots", Admin, s.snapshotsList)
 		s.handle(api, http.MethodGet, "/v1/config/snapshots/{id}", Admin, s.snapshotGet)
 		s.handleStepUp(api, http.MethodPost, "/v1/config/snapshots/{id}/restore", Admin, s.snapshotRestore)
-		s.handle(api, http.MethodPatch, "/v1/config/global", Admin, s.globalPatch)
-		s.handle(api, http.MethodPatch, "/v1/config/path-defaults", Admin, s.pathDefaultsPatch)
-		s.handle(api, http.MethodPut, "/v1/config/paths/*", Admin, s.pathPut)
-		s.handle(api, http.MethodDelete, "/v1/config/paths/*", Admin, s.pathDelete)
+		// The structured edits can do what the YAML editor does (sources, forwards, recording, listeners), so they take
+		// step-up too.
+		s.handleStepUp(api, http.MethodPatch, "/v1/config/global", Admin, s.globalPatch)
+		s.handleStepUp(api, http.MethodPatch, "/v1/config/path-defaults", Admin, s.pathDefaultsPatch)
+		s.handleStepUp(api, http.MethodPut, "/v1/config/paths/*", Admin, s.pathPut)
+		s.handleStepUp(api, http.MethodDelete, "/v1/config/paths/*", Admin, s.pathDelete)
 
 		s.routes = append(s.routes, Route{"*", "/api/mtx/*", PerOperation, false})
 		api.With(s.require(PerOperation)).Mount("/mtx", http.StripPrefix("/api/mtx", s.d.Proxy))

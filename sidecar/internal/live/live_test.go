@@ -649,3 +649,25 @@ func TestSummary(t *testing.T) {
 		t.Fatalf("next minute: %+v", next)
 	}
 }
+
+// RTMP clients and others send their credentials in the URL query: the event stream never carries it.
+func TestQueryRedacted(t *testing.T) {
+	f := newFake()
+	f.set("rtmpConnsList", map[string]any{"id": "1", "path": "live/a", "query": "user=cam&pass=s3cret-key"})
+	f.set("webrtcSessionsList", map[string]any{"id": "2", "path": "live/a", "query": "token=s3cret-token"})
+	h := newHub(t, f)
+	h.Poll(context.Background())
+	sub, err := h.Subscribe(auth.RoleAdmin, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Unsubscribe(sub)
+	for _, ev := range sub.Initial {
+		if strings.Contains(string(ev.Data), "s3cret") || strings.Contains(string(ev.Data), `"query"`) {
+			t.Fatalf("the event stream carries a query: %s", ev.Data)
+		}
+	}
+	if items := h.lists["rtmpConns"].items; len(items) != 1 {
+		t.Fatalf("the connection itself is gone: %v", items)
+	}
+}

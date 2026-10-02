@@ -310,3 +310,75 @@ func TestLockout(t *testing.T) {
 		t.Error("Succeed did not reset the count")
 	}
 }
+
+// Parallel attempts cannot get past the threshold: each reserves its place before the slow check.
+func TestLockoutAttempts(t *testing.T) {
+	l := NewLockout(3, 15*time.Minute)
+	key := SignInKey("Admin", "192.0.2.1")
+	var held []*Attempt
+	for range 3 {
+		a, _ := l.Begin(key)
+		if a == nil {
+			t.Fatal("refused under the threshold")
+		}
+		held = append(held, a)
+	}
+	if a, wait := l.Begin(key); a != nil || wait <= 0 {
+		t.Fatal("a fourth attempt in flight was allowed")
+	}
+	held[0].Abandon()
+	held[0].Fail() // no effect after Abandon
+	held[1].Fail()
+	held[2].Fail()
+	a, _ := l.Begin(key)
+	if a == nil {
+		t.Fatal("refused with two failures")
+	}
+	if !a.Fail() {
+		t.Fatal("the third failure did not lock")
+	}
+	if a, wait := l.Begin(key); a != nil || wait < 14*time.Minute {
+		t.Fatalf("locked key began an attempt (wait %v)", wait)
+	}
+	// Another address, and the account key, are separate.
+	if a, _ := l.Begin(SignInKey("admin", "198.51.100.9")); a == nil {
+		t.Fatal("the lock reached another address")
+	}
+	if a, _ := l.Begin(AccountKey(1)); a == nil {
+		t.Fatal("the lock reached the account key")
+	}
+	// Success forgets failures.
+	k2 := AccountKey(2)
+	a, _ = l.Begin(k2)
+	a.Fail()
+	a, _ = l.Begin(k2)
+	a.Succeed()
+	l.mu.Lock()
+	_, kept := l.entries[k2]
+	l.mu.Unlock()
+	if kept {
+		t.Fatal("a success left the entry")
+	}
+}
+
+// Beyond the running hashes and maxWaiting waiting ones, a check is refused at once.
+func TestHasherBusy(t *testing.T) {
+	h := NewHasher(Params{Memory: 8, Time: 1, Threads: 1}, 1)
+	h.sem <- struct{}{} // the one slot is taken
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errs := make(chan error, maxWaiting+1)
+	for range maxWaiting {
+		go func() { errs <- h.acquire(ctx) }()
+	}
+	for h.waiting.Load() < maxWaiting {
+		time.Sleep(time.Millisecond)
+	}
+	if err := h.acquire(ctx); !errors.Is(err, ErrBusy) {
+		t.Fatalf("one more than the queue: %v", err)
+	}
+	cancel()
+	for range maxWaiting {
+		<-errs
+	}
+}

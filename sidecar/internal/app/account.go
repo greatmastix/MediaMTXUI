@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -85,27 +86,43 @@ func (s *Server) writeAccount(w http.ResponseWriter, r *http.Request) {
 	s.accountGet(w, r)
 }
 
+// accountAttempt reserves a password or code check by a signed-in user: rate-limited and locked per account, apart
+// from anonymous sign-ins (whose lockout a stranger can trigger). Refused, it has answered already.
+func (s *Server) accountAttempt(w http.ResponseWriter, userID int64) (*auth.Attempt, bool) {
+	key := auth.AccountKey(userID)
+	if ok, wait := s.loginRate.Allow(key); !ok {
+		writeError(w, http.StatusTooManyRequests, "rate_limited", fmt.Sprintf("Too many attempts. Try again in %d seconds.", retryAfter(w, wait)))
+		return nil, false
+	}
+	attempt, wait := s.lockout.Begin(key)
+	if attempt == nil {
+		writeError(w, http.StatusTooManyRequests, "locked", "Too many failed attempts. Try again in "+
+			strconv.Itoa((retryAfter(w, wait)+59)/60)+" minutes.")
+		return nil, false
+	}
+	return attempt, true
+}
+
 // checkPassword verifies the signed-in user's current password (for changes that need it).
 func (s *Server) checkPassword(w http.ResponseWriter, r *http.Request, password string) bool {
 	ctx := r.Context()
 	cur, _ := current(ctx)
-	key := auth.LockKey(cur.user.Username)
-	if locked, wait := s.lockout.Locked(key); locked {
-		writeError(w, http.StatusTooManyRequests, "locked", "Too many failed attempts. Try again in "+
-			strconv.Itoa((retryAfter(w, wait)+59)/60)+" minutes.")
+	attempt, ok := s.accountAttempt(w, cur.user.ID)
+	if !ok {
 		return false
 	}
+	defer attempt.Abandon()
 	good, _, err := s.d.Hasher.Verify(ctx, cur.user.PasswordHash, password)
-	if err != nil && ctx.Err() != nil {
+	if hashBusy(ctx, err) {
 		writeError(w, http.StatusServiceUnavailable, "busy", "The server is busy. Try again.")
 		return false
 	}
 	if !good {
-		s.lockout.Fail(key)
+		attempt.Fail()
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "Your current password is not right.")
 		return false
 	}
-	s.lockout.Succeed(key)
+	attempt.Succeed()
 	return true
 }
 
@@ -228,8 +245,16 @@ func (s *Server) accountSessionEnd(w http.ResponseWriter, r *http.Request) {
 
 // TOTP.
 
+// totpSetup starts setting up an authenticator app; it takes the password. A new second factor also passes
+// step-up, so enrolling one must need more than the session: a stolen cookie must not be able to add its own.
 func (s *Server) totpSetup(w http.ResponseWriter, r *http.Request) {
 	cur, _ := current(r.Context())
+	var body struct {
+		Password string `json:"password"`
+	}
+	if !decodeJSON(w, r, &body) || !s.checkPassword(w, r, body.Password) {
+		return
+	}
 	if cur.user.TOTPEnc != "" {
 		writeError(w, http.StatusConflict, "exists", "Your authenticator app is already set up. Switch it off first to set up another.")
 		return
@@ -350,9 +375,17 @@ func (s *Server) recoveryCodes(w http.ResponseWriter, r *http.Request) {
 
 // Passkeys.
 
+// passkeyRegisterBegin starts adding a passkey; it takes the password (see totpSetup: a passkey signs in and passes
+// step-up on its own).
 func (s *Server) passkeyRegisterBegin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cur, _ := current(ctx)
+	var body struct {
+		Password string `json:"password"`
+	}
+	if !decodeJSON(w, r, &body) || !s.checkPassword(w, r, body.Password) {
+		return
+	}
 	wa, err := s.webAuthn()
 	if err != nil {
 		writeError(w, http.StatusNotFound, "unavailable", "Passkeys are not available on this server's address.")

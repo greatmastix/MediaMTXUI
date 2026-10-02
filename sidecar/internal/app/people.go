@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base32"
@@ -189,18 +188,6 @@ func (s *Server) userJoinCode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, inv)
 }
 
-// activeAdmins counts admins who can sign in.
-func (s *Server) activeAdmins(ctx context.Context) int {
-	users, _ := s.d.Store.Users(ctx)
-	n := 0
-	for _, x := range users {
-		if x.Role == string(auth.RoleAdmin) && x.PasswordHash != "" && !x.Disabled {
-			n++
-		}
-	}
-	return n
-}
-
 // userPatch changes a user's role or disables (enables) the account. Admins cannot change their own role or disable
 // themselves (no locking yourself out), and the last admin stays one. A change applies to the user's next request;
 // their open event streams end so pages reload, and disabling ends their sessions.
@@ -218,7 +205,7 @@ func (s *Server) userPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cur, _ := current(ctx)
-	lastAdmin := u.Role == string(auth.RoleAdmin) && u.PasswordHash != "" && !u.Disabled && s.activeAdmins(ctx) <= 1
+	var change store.UserChange
 	if req.Role != nil && *req.Role != u.Role {
 		if _, err := auth.ParseRole(*req.Role); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid", "Role must be streamer, viewer, operator or admin.")
@@ -228,33 +215,35 @@ func (s *Server) userPatch(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "self", "You cannot change your own role.")
 			return
 		}
-		if lastAdmin {
-			writeError(w, http.StatusConflict, "last_admin", "This is the last admin.")
-			return
-		}
-		if err := s.d.Store.SetUserRole(ctx, u.ID, *req.Role); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal", "Cannot change the role.")
-			return
-		}
-		audit.Set(ctx, "user.role", u.Username, map[string]any{"from": u.Role, "to": *req.Role})
+		change.Role = req.Role
 	}
 	if req.Disabled != nil && *req.Disabled != u.Disabled {
 		if cur.user.ID == u.ID {
 			writeError(w, http.StatusConflict, "self", "You cannot disable yourself.")
 			return
 		}
-		if *req.Disabled && lastAdmin {
-			writeError(w, http.StatusConflict, "last_admin", "This is the last admin.")
-			return
-		}
-		if err := s.d.Store.SetUserDisabled(ctx, u.ID, *req.Disabled); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal", "Cannot change the account.")
-			return
-		}
-		if *req.Disabled {
+		change.Disabled = req.Disabled
+	}
+	if change.Role == nil && change.Disabled == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	switch err := s.d.Store.ChangeUser(ctx, u.ID, change); {
+	case errors.Is(err, store.ErrLastAdmin):
+		writeError(w, http.StatusConflict, "last_admin", "This is the last admin.")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "internal", "Cannot change the account.")
+		return
+	}
+	if change.Role != nil {
+		audit.Set(ctx, "user.role", u.Username, map[string]any{"from": u.Role, "to": *change.Role})
+	}
+	if change.Disabled != nil {
+		if *change.Disabled {
 			_, _ = s.d.Store.DeleteUserSessionsExcept(ctx, u.ID, "")
 		}
-		audit.Set(ctx, "user.disable", u.Username, map[string]any{"disabled": *req.Disabled})
+		audit.Set(ctx, "user.disable", u.Username, map[string]any{"disabled": *change.Disabled})
 	}
 	s.sessionNudge.fire()
 	w.WriteHeader(http.StatusNoContent)
@@ -321,11 +310,12 @@ func (s *Server) userDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "self", "You cannot delete yourself.")
 		return
 	}
-	if u.Role == string(auth.RoleAdmin) && u.PasswordHash != "" && s.activeAdmins(r.Context()) <= 1 {
+	// Sessions, layouts and codes go with the user.
+	switch err := s.d.Store.ChangeUser(r.Context(), u.ID, store.UserChange{Delete: true}); {
+	case errors.Is(err, store.ErrLastAdmin):
 		writeError(w, http.StatusConflict, "last_admin", "This is the last admin.")
 		return
-	}
-	if err := s.d.Store.DeleteUser(r.Context(), u.ID); err != nil { // sessions, layouts and codes go with it
+	case err != nil:
 		writeError(w, http.StatusInternalServerError, "internal", "Cannot delete the user.")
 		return
 	}
@@ -373,6 +363,10 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	}
 	audit.Actor(ctx, u.Username, &u.ID)
 	audit.Set(ctx, "user.join", u.Username, map[string]any{"result": "ok"})
+	// A join code for someone who had joined is a password reset: whoever held their old sessions is signed out.
+	if _, err := s.d.Store.DeleteUserSessionsExcept(ctx, u.ID, ""); err == nil {
+		s.sessionNudge.fire()
+	}
 	sess, err := s.startSession(w, r, u, "password")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "You have joined, but signing in failed. Sign in with your new password.")

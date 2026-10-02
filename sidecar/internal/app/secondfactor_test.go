@@ -49,7 +49,10 @@ func (h *harness) enableTOTP() (secret string, codes []string) {
 		Secret string `json:"secret"`
 		URI    string `json:"uri"`
 	}
-	h.json(h.do("POST", "/api/v1/account/totp/setup", nil), &setup)
+	if rec := h.do("POST", "/api/v1/account/totp/setup", map[string]any{"password": "not it"}); rec.Code != http.StatusUnauthorized {
+		h.t.Fatalf("setting up TOTP without the password: %d", rec.Code)
+	}
+	h.json(h.do("POST", "/api/v1/account/totp/setup", map[string]any{"password": adminPassword}), &setup)
 	if !strings.HasPrefix(setup.URI, "otpauth://totp/") {
 		h.t.Fatalf("setup %+v", setup)
 	}
@@ -116,10 +119,27 @@ func TestTOTPSignIn(t *testing.T) {
 	if rec := h.do("POST", "/api/v1/auth/login/code", map[string]any{"ticket": ticket, "code": codes[3]}); rec.Code != http.StatusUnauthorized {
 		t.Errorf("a used recovery code: %d", rec.Code)
 	}
-	// Five wrong codes end the ticket.
-	for range 5 {
+	// Wrong codes count against the account (the harness locks after 3; the used recovery code was the first), so
+	// fresh tickets from the password do not buy more guesses: even the right code waits out the lock.
+	for range 2 {
 		h.do("POST", "/api/v1/auth/login/code", map[string]any{"ticket": ticket, "code": "111111"})
 	}
+	h.password(&ticket)
+	if rec := h.do("POST", "/api/v1/auth/login/code", map[string]any{"ticket": ticket, "code": codes[4]}); rec.Code != http.StatusTooManyRequests ||
+		decode(rec)["error"] != "locked" {
+		t.Errorf("a code while the account is locked: %d %s", rec.Code, rec.Body)
+	}
+	h.srv.lockout = auth.NewLockout(3, 15*time.Minute) // the lock runs out
+	// Five tries end a ticket, whatever the lock says.
+	h.password(&ticket)
+	for range 2 {
+		h.do("POST", "/api/v1/auth/login/code", map[string]any{"ticket": ticket, "code": "111111"})
+	}
+	h.srv.lockout = auth.NewLockout(3, 15*time.Minute)
+	for range 3 {
+		h.do("POST", "/api/v1/auth/login/code", map[string]any{"ticket": ticket, "code": "111111"})
+	}
+	h.srv.lockout = auth.NewLockout(3, 15*time.Minute)
 	if rec := h.do("POST", "/api/v1/auth/login/code", map[string]any{"ticket": ticket, "code": codes[4]}); rec.Code != http.StatusUnauthorized ||
 		decode(rec)["error"] != "ticket" {
 		t.Errorf("a ticket after five wrong codes: %d %s", rec.Code, rec.Body)
@@ -207,8 +227,8 @@ func TestStepUp(t *testing.T) {
 	}
 }
 
-// The admin-level routes, exactly: people, credentials, the raw YAML and restores, exposure, opting out of step-up,
-// and backups' passphrase, schedule, deletion and restore.
+// The admin-level routes, exactly: people, credentials, every config write and restores, exposure, opting out of
+// step-up, and backups' passphrase, schedule, deletion and restore.
 func TestStepUpRoutes(t *testing.T) {
 	h := newHarness(t, nil, fast)
 	var got []string
@@ -225,6 +245,8 @@ func TestStepUpRoutes(t *testing.T) {
 		"PUT /api/v1/config", "POST /api/v1/config/snapshots/{id}/restore", "PUT /api/v1/account/step-up",
 		"PUT /api/v1/backups/passphrase", "PUT /api/v1/backups/schedule", "DELETE /api/v1/backups/{name}",
 		"POST /api/v1/backups/{name}/restore",
+		"PATCH /api/v1/config/global", "PATCH /api/v1/config/path-defaults", "PUT /api/v1/config/paths/*",
+		"DELETE /api/v1/config/paths/*",
 	}
 	slices.Sort(got)
 	slices.Sort(want)
@@ -246,7 +268,10 @@ func (h *harness) registerPasskey(name string) *virtualKey {
 		ID      string          `json:"id"`
 		Options json.RawMessage `json:"options"`
 	}
-	h.json(h.do("POST", "/api/v1/account/passkeys/begin", nil), &begin)
+	if rec := h.do("POST", "/api/v1/account/passkeys/begin", map[string]any{}); rec.Code != http.StatusUnauthorized {
+		h.t.Fatalf("adding a passkey without the password: %d", rec.Code)
+	}
+	h.json(h.do("POST", "/api/v1/account/passkeys/begin", map[string]any{"password": adminPassword}), &begin)
 	opts, err := virtualwebauthn.ParseAttestationOptions(string(begin.Options))
 	if err != nil {
 		h.t.Fatal(err)
@@ -503,5 +528,58 @@ func TestAuditViewer(t *testing.T) {
 	}
 	if rec := h.do("GET", "/api/v1/audit/export?format=xls", nil); rec.Code != http.StatusBadRequest {
 		t.Errorf("xls: %d", rec.Code)
+	}
+}
+
+// A stranger who fails sign-ins for a username locks that username only from their own address: the real user signs
+// in from elsewhere, and a signed-in user's step-up and password checks have a lockout of their own.
+func TestLockoutIsolation(t *testing.T) {
+	h := newHarness(t, nil, fast)
+	h.completeSetup()
+	stranger := header("X-Forwarded-For", "198.51.100.66")
+	for range 3 {
+		h.do("POST", "/api/v1/auth/login", map[string]any{"username": "admin", "password": "guess"}, stranger)
+	}
+	if rec := h.do("POST", "/api/v1/auth/login", map[string]any{"username": "admin", "password": adminPassword}, stranger); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("the stranger's address after 3 failures: %d", rec.Code)
+	}
+	h.ageSessions(h.me().ID)
+	if rec := h.do("POST", "/api/v1/auth/step-up", map[string]any{"password": adminPassword}); rec.Code != http.StatusOK {
+		t.Fatalf("step-up while a stranger locked the username: %d %s", rec.Code, rec.Body)
+	}
+	h.signOutLocally()
+	if rec := h.do("POST", "/api/v1/auth/login", map[string]any{"username": "admin", "password": adminPassword}); rec.Code != http.StatusOK {
+		t.Fatalf("signing in from the real address: %d %s", rec.Code, rec.Body)
+	}
+	long := strings.Repeat("a", 8<<10) // under the body limit, far over any username
+	if rec := h.do("POST", "/api/v1/auth/login", map[string]any{"username": long, "password": "x"}); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("an 8 KiB username: %d", rec.Code)
+	}
+}
+
+// A join code for someone who had joined resets their password: their other sessions end.
+func TestJoinResetEndsSessions(t *testing.T) {
+	h := newHarness(t, nil, fast)
+	h.completeSetup()
+	var inv struct {
+		User     struct{ ID int64 } `json:"user"`
+		JoinCode string             `json:"joinCode"`
+	}
+	h.json(h.do("POST", "/api/v1/users", map[string]any{"username": "dana", "role": "viewer"}), &inv)
+	adminCookie, adminCSRF := h.cookie, h.csrf
+	h.signOutLocally()
+	if rec := h.do("POST", "/api/v1/join", map[string]any{"code": inv.JoinCode, "password": "dana's first password"}); rec.Code != http.StatusCreated {
+		t.Fatal(rec.Code)
+	}
+	old := h.cookie
+	h.cookie, h.csrf = adminCookie, adminCSRF
+	h.json(h.do("POST", "/api/v1/users/"+itoa(inv.User.ID)+"/join-code", nil), &inv)
+	h.signOutLocally()
+	if rec := h.do("POST", "/api/v1/join", map[string]any{"code": inv.JoinCode, "password": "dana's second password"}); rec.Code != http.StatusCreated {
+		t.Fatal(rec.Code)
+	}
+	h.cookie, h.csrf = old, ""
+	if rec := h.do("GET", "/api/v1/session", nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("the session from before the reset: %d", rec.Code)
 	}
 }

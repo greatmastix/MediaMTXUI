@@ -56,8 +56,11 @@ export const mySessionsQuery = queryOptions({
 export const endMySession = (handle: string) =>
   requestNoContent('DELETE', `/api/v1/account/sessions/${encodeURIComponent(handle)}`)
 
-export const totpSetup = () =>
-  request('POST', '/api/v1/account/totp/setup', z.object({ secret: z.string(), uri: z.string() }))
+/** Starts setting up an authenticator app; adding a second factor takes the password. */
+export const totpSetup = (password: string) =>
+  request('POST', '/api/v1/account/totp/setup', z.object({ secret: z.string(), uri: z.string() }), {
+    password,
+  })
 
 const codesSchema = z.object({ recoveryCodes: z.array(z.string()) })
 export const totpEnable = (code: string) =>
@@ -72,9 +75,12 @@ const ceremonySchema = z.object({ id: z.string(), options: z.record(z.string(), 
 /** Registers a passkey: the server's options, the authenticator, the answer back. */
 export async function addPasskey(
   name: string,
+  password: string,
   create: (options: Record<string, unknown>) => Promise<Record<string, unknown>>,
 ) {
-  const begin = await request('POST', '/api/v1/account/passkeys/begin', ceremonySchema)
+  const begin = await request('POST', '/api/v1/account/passkeys/begin', ceremonySchema, {
+    password,
+  })
   const credential = await create(begin.options)
   return request('POST', '/api/v1/account/passkeys/finish', accountSchema, {
     id: begin.id,

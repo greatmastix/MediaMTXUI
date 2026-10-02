@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -156,6 +157,14 @@ func (s *Server) setupComplete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, info)
 }
 
+// maxUsernameInput bounds a username as typed at sign-in.
+const maxUsernameInput = 64
+
+// hashBusy reports a password check that did not happen: too many waiting (auth.ErrBusy), or the request gone.
+func hashBusy(ctx context.Context, err error) bool {
+	return err != nil && (errors.Is(err, auth.ErrBusy) || ctx.Err() != nil)
+}
+
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var body struct {
@@ -165,21 +174,30 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	audit.Set(ctx, "auth.login", body.Username, nil)
-	audit.Actor(ctx, body.Username, nil)
-	if ok, wait := s.loginRate.Allow(clientip.RateKey(clientip.From(ctx).IP)); !ok {
+	// No username is that long (32 at most); refusing it here keeps it out of the lockout table and the audit log.
+	if len(body.Username) > maxUsernameInput {
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "Wrong username or password.")
+		return
+	}
+	// Who tried is recorded once the username turns out to be a real one: a password typed into the username field
+	// must not end up in the append-only log.
+	audit.Set(ctx, "auth.login", "(unknown username)", nil)
+	audit.Actor(ctx, "anonymous", nil)
+	rateKey := clientip.RateKey(clientip.From(ctx).IP)
+	if ok, wait := s.loginRate.Allow(rateKey); !ok {
 		audit.Set(ctx, "", "", map[string]any{"result": "rate limited"})
 		writeError(w, http.StatusTooManyRequests, "rate_limited",
 			fmt.Sprintf("Too many sign-in attempts from your address. Try again in %d seconds.", retryAfter(w, wait)))
 		return
 	}
-	key := auth.LockKey(body.Username)
-	if locked, wait := s.lockout.Locked(key); locked {
+	attempt, wait := s.lockout.Begin(auth.SignInKey(body.Username, rateKey))
+	if attempt == nil {
 		audit.Set(ctx, "", "", map[string]any{"result": "locked"})
 		writeError(w, http.StatusTooManyRequests, "locked",
 			fmt.Sprintf("Too many failed sign-ins for this username. Try again in %d minutes.", int(math.Ceil(float64(retryAfter(w, wait))/60))))
 		return
 	}
+	defer attempt.Abandon()
 
 	// Exactly one argon2id verification on every path below, so unknown usernames take as long as wrong passwords.
 	user, err := s.d.Store.UserByName(ctx, body.Username)
@@ -187,7 +205,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	switch {
 	// An invited account that has not joined yet has no password: it cannot sign in, and takes as long as any other.
 	case errors.Is(err, store.ErrNotFound), err == nil && user.PasswordHash == "":
-		if err := s.d.Hasher.VerifyDummy(ctx, body.Password); err != nil && ctx.Err() != nil {
+		if err := s.d.Hasher.VerifyDummy(ctx, body.Password); hashBusy(ctx, err) {
 			writeError(w, http.StatusServiceUnavailable, "busy", "The server is busy. Try again.")
 			return
 		}
@@ -195,8 +213,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", "Cannot read the user database.")
 		return
 	default:
+		audit.Set(ctx, "", user.Username, nil)
+		audit.Actor(ctx, user.Username, nil)
 		good, rehash, verr := s.d.Hasher.Verify(ctx, user.PasswordHash, body.Password)
-		if verr != nil && ctx.Err() != nil {
+		if hashBusy(ctx, verr) {
 			writeError(w, http.StatusServiceUnavailable, "busy", "The server is busy. Try again.")
 			return
 		}
@@ -211,14 +231,18 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !ok {
-		if s.lockout.Fail(key) {
-			s.d.Log.Warn("username locked after repeated failed sign-ins", "username", body.Username)
+		if attempt.Fail() {
+			who := "(unknown username)"
+			if user.Username != "" {
+				who = user.Username
+			}
+			s.d.Log.Warn("username locked after repeated failed sign-ins", "username", who, "from", rateKey)
 		}
 		audit.Set(ctx, "", "", map[string]any{"result": "failed"})
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "Wrong username or password.")
 		return
 	}
-	s.lockout.Succeed(key)
+	attempt.Succeed()
 	if user.TOTPEnc != "" {
 		// The authenticator app's code comes next (POST /v1/auth/login/code): no session before it.
 		ticket, err := s.newTicket(user.ID)

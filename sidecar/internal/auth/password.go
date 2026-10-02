@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
@@ -32,12 +33,20 @@ const (
 )
 
 // Hasher hashes and verifies passwords with argon2id. It runs at most a fixed number of hashes at once, so a burst of
-// sign-ins cannot exhaust memory (each hash holds Params.Memory).
+// sign-ins cannot exhaust memory (each hash holds Params.Memory), and lets at most maxWaiting more wait for a turn:
+// beyond that a request is refused at once (ErrBusy) rather than queued behind a flood for as long as it lasts.
 type Hasher struct {
-	params Params
-	sem    chan struct{}
-	dummy  string
+	params  Params
+	sem     chan struct{}
+	waiting atomic.Int32
+	dummy   string
 }
+
+// maxWaiting bounds the requests waiting for a hash.
+const maxWaiting = 16
+
+// ErrBusy is returned when too many requests already wait for a hash.
+var ErrBusy = errors.New("the password hasher is busy")
 
 // NewHasher returns a hasher running at most concurrency hashes at once.
 func NewHasher(p Params, concurrency int) *Hasher {
@@ -49,6 +58,16 @@ func NewHasher(p Params, concurrency int) *Hasher {
 }
 
 func (h *Hasher) acquire(ctx context.Context) error {
+	select {
+	case h.sem <- struct{}{}:
+		return nil
+	default:
+	}
+	if h.waiting.Add(1) > maxWaiting {
+		h.waiting.Add(-1)
+		return ErrBusy
+	}
+	defer h.waiting.Add(-1)
 	select {
 	case h.sem <- struct{}{}:
 		return nil

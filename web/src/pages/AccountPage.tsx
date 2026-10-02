@@ -258,6 +258,7 @@ function Authenticator({ account: a }: { account: Account }) {
   const [codes, setCodes] = useState<string[] | null>(null)
   const [asking, setAsking] = useState<'off' | 'codes' | null>(null)
   const setup = useMutation({ mutationFn: totpSetup })
+  const [askSetup, setAskSetup] = useState(false)
   const enable = useMutation({
     mutationFn: () => totpEnable(code),
     onSuccess: (res) => {
@@ -380,12 +381,22 @@ function Authenticator({ account: a }: { account: Account }) {
             </div>
           </div>
         </div>
+      ) : askSetup ? (
+        <WithPassword
+          label="Continue"
+          run={async (password) => {
+            await setup.mutateAsync(password)
+            setAskSetup(false)
+          }}
+          onCancel={() => {
+            setAskSetup(false)
+          }}
+        />
       ) : (
         <Button
           size="sm"
-          disabled={setup.isPending}
           onClick={() => {
-            setup.mutate()
+            setAskSetup(true)
           }}
         >
           Set up an authenticator app
@@ -403,11 +414,13 @@ function Passkeys({ account: a }: { account: Account }) {
   const saved = (next: Account) => {
     queryClient.setQueryData(accountQuery.queryKey, next)
   }
+  const [password, setPassword] = useState('')
   const add = useMutation({
-    mutationFn: () => addPasskey(name.trim(), createPasskey),
+    mutationFn: () => addPasskey(name.trim(), password, createPasskey),
     onSuccess: (next) => {
       saved(next)
       setName('')
+      setPassword('')
     },
   })
   const rename = useMutation({
@@ -525,7 +538,19 @@ function Passkeys({ account: a }: { account: Account }) {
               }}
             />
           </label>
-          <Button type="submit" size="sm" disabled={add.isPending}>
+          <label className="space-y-1 text-sm">
+            <span className="font-medium">Your password</span>
+            <input
+              type="password"
+              autoComplete="current-password"
+              className={fieldClass}
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value)
+              }}
+            />
+          </label>
+          <Button type="submit" size="sm" disabled={add.isPending || !password}>
             <KeyRound /> Add a passkey
           </Button>
         </form>

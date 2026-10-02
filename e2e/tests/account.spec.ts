@@ -30,6 +30,8 @@ test('an authenticator app, then its code at sign-in; a recovery code once', asy
   await signInAs(page, 'e2e-totp', me.password, '/account')
   const app = page.getByRole('region', { name: 'Authenticator app' })
   await app.getByRole('button', { name: 'Set up an authenticator app' }).click()
+  await app.getByLabel('Your password').fill(me.password) // adding a factor takes the password
+  await app.getByRole('button', { name: 'Continue' }).click()
   await expect(app.getByRole('img', { name: 'QR code for your authenticator app' })).toBeVisible()
   const secret = (await app.getByTestId('totp-secret').innerText()).replace(/\s/g, '')
   recordSecret(secret)

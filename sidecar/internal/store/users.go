@@ -126,3 +126,48 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash, role str
 	}
 	return User{ID: id, Username: username, PasswordHash: passwordHash, Role: role, CreatedAt: now, UpdatedAt: now}, nil
 }
+
+// ErrLastAdmin is returned when a change would leave no admin who can sign in.
+var ErrLastAdmin = errors.New("no admin who can sign in would be left")
+
+// UserChange is a change to a user: a new role, disabled or enabled, or deletion.
+type UserChange struct {
+	Role     *string
+	Disabled *bool
+	Delete   bool
+}
+
+// ChangeUser applies a change in one transaction and refuses it (ErrLastAdmin) when no admin who can sign in would be
+// left. The count is taken inside the transaction, after the change: two admins acting at once cannot both pass a
+// check made before either wrote.
+func (s *Store) ChangeUser(ctx context.Context, id int64, c UserChange) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // after Commit, a no-op
+	now := ms(s.now())
+	if c.Delete {
+		if err := affected(tx.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)); err != nil {
+			return err
+		}
+	}
+	if c.Role != nil && !c.Delete {
+		if err := affected(tx.ExecContext(ctx, `UPDATE users SET role = ?, updated_at = ? WHERE id = ?`, *c.Role, now, id)); err != nil {
+			return err
+		}
+	}
+	if c.Disabled != nil && !c.Delete {
+		if err := affected(tx.ExecContext(ctx, `UPDATE users SET disabled = ?, updated_at = ? WHERE id = ?`, *c.Disabled, now, id)); err != nil {
+			return err
+		}
+	}
+	var admins int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM users WHERE role = 'admin' AND password_hash != '' AND disabled = 0`).Scan(&admins); err != nil {
+		return err
+	}
+	if admins == 0 {
+		return ErrLastAdmin
+	}
+	return tx.Commit()
+}

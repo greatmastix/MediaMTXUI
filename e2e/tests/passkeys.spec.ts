@@ -40,6 +40,7 @@ test('a passkey signs in without a password; a counter that goes back does not; 
   ).toBe(true)
   const keys = page.getByRole('region', { name: 'Passkeys' })
   await keys.getByLabel('Name for the new passkey').fill('e2e key')
+  await keys.getByLabel('Your password').fill(me.password) // adding a factor takes the password
   await keys.getByRole('button', { name: 'Add a passkey' }).click()
   await expect(keys.getByRole('list', { name: 'Your passkeys' })).toContainText('e2e key')
 

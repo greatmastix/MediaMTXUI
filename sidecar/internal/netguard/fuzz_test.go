@@ -35,7 +35,7 @@ func FuzzCheckURL(f *testing.F) {
 			if a, err := netip.ParseAddr(host); err == nil && g.CheckAddr(a) != nil {
 				t.Fatalf("accepted %q, whose host %s is blocked", s, a)
 			}
-			if strings.HasSuffix(strings.ToLower(strings.TrimSuffix(host, ".")), "localhost") {
+			if name := strings.ToLower(strings.TrimSuffix(host, ".")); name == "localhost" || strings.HasSuffix(name, ".localhost") {
 				t.Fatalf("accepted %q, a loopback name", s)
 			}
 		}

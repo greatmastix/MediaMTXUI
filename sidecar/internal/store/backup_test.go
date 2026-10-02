@@ -73,3 +73,46 @@ func TestSnapshotAndInspect(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Two admins demoting each other at the same moment: one change goes through, the other is refused, and an admin
+// remains. A disabled admin can go while another can still sign in.
+func TestChangeUserKeepsAnAdmin(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	a, err := s.CompleteSetup(ctx, "alice", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.CreateUser(ctx, "bob", "hash", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewer := "viewer"
+	errs := make(chan error, 2)
+	for _, id := range []int64{a.ID, b.ID} {
+		go func() { errs <- s.ChangeUser(ctx, id, UserChange{Role: &viewer}) }()
+	}
+	e1, e2 := <-errs, <-errs
+	if (e1 == nil) == (e2 == nil) || (!errors.Is(e1, ErrLastAdmin) && !errors.Is(e2, ErrLastAdmin)) {
+		t.Fatalf("both or neither went through: %v, %v", e1, e2)
+	}
+	users, _ := s.Users(ctx)
+	admins := 0
+	for _, u := range users {
+		if u.Role == "admin" {
+			admins++
+		}
+	}
+	if admins != 1 {
+		t.Fatalf("%d admins left", admins)
+	}
+	// Whoever is still an admin stays; a disabled admin can be deleted.
+	c, _ := s.CreateUser(ctx, "carol", "hash", "admin")
+	yes := true
+	if err := s.ChangeUser(ctx, c.ID, UserChange{Disabled: &yes}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ChangeUser(ctx, c.ID, UserChange{Delete: true}); err != nil {
+		t.Fatalf("deleting a disabled admin: %v", err)
+	}
+}
