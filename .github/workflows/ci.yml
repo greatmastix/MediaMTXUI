@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: ./dev ci
+      - run: scripts/ci-run.sh ./dev ci
 
   e2e:
     runs-on: ubuntu-latest
@@ -26,4 +26,4 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: ./dev e2e
+      - run: scripts/ci-run.sh ./dev e2e
