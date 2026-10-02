@@ -1,0 +1,77 @@
+# Dev overlay, used by `./dev up` (project mtxdev) on top of ../compose.yaml and compose.test.yml. Differences from a
+# real deployment:
+#   - everything runs as your own uid/gid (DEV_UID/DEV_GID), so dev data under deploy/.dev/mtxdev/ stays yours
+#   - ports are published on 127.0.0.1:18xxx only
+#   - profile "vite" adds the Vite dev server with hot reload
+#   - data lives under deploy/.dev/mtxdev/ instead of in volumes
+services:
+  mediamtx:
+    user: "${DEV_UID:?}:${DEV_GID:?}"
+    ports: !override
+      - "127.0.0.1:18554:8554/tcp"
+    volumes:
+      - ${DATA_DIR:?}/config:/config:ro
+      - ${DATA_DIR:?}/recordings:/recordings
+      - ${DATA_DIR:?}/logs:/logs
+      - ${DATA_DIR:?}/hooks:/hooks:ro
+      - ${DATA_DIR:?}/holding:/holding:ro
+
+  sidecar:
+    user: "${DEV_UID:?}:${DEV_GID:?}"
+    ports: !override
+      - "127.0.0.1:18080:9080"
+    environment:
+      MTXUI_PUBLIC_URL: ${PUBLIC_URL:?}
+      MTXUI_PUBLIC_HOST: ${PUBLIC_HOST:?}
+    volumes:
+      - ${DATA_DIR:?}/config:/data/config
+      - ${DATA_DIR:?}/recordings:/data/recordings:ro
+      - ${DATA_DIR:?}/logs:/data/logs
+      - ${DATA_DIR:?}/state:/data/state
+      - ${DATA_DIR:?}/hooks:/data/hooks
+      - ${DATA_DIR:?}/holding:/holding
+      - ${DATA_DIR:?}/backups:/data/backups
+      - ${DATA_DIR:?}/portgate:/data/portgate
+      - ${PORTGATE_STATUS_DIR:?}:/data/portgate-status:ro
+
+  # The exposure helper with the dry-run driver, looping instead of systemd: the Exposure page works, and the
+  # "firewall" is deploy/.dev/mtxdev/portgate-status/ufw.rules.
+  portgate:
+    image: mediamtx-ui:dev # the sidecar's image, built by compose.test.yml, which carries the helper
+    pull_policy: never
+    depends_on: [sidecar]
+    healthcheck: { disable: true } # the image's healthcheck is the sidecar's
+    entrypoint: ["/usr/libexec/mtxui/mtx-portgate", "-policy", "/etc/mtx-portgate/policy.json", "-every", "1s", "apply"]
+    user: "${DEV_UID:?}:${DEV_GID:?}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [mtx]
+    volumes:
+      - ./dev/portgate-policy.json:/etc/mtx-portgate/policy.json:ro
+      - ${DATA_DIR:?}/portgate:/data/portgate:ro
+      - ${PORTGATE_STATUS_DIR:?}:/data/portgate-status
+    mem_limit: 64m
+    pids_limit: 32
+
+  web:
+    profiles: [vite]
+    image: ${NODE_IMAGE:?}
+    user: "${DEV_UID:?}:${DEV_GID:?}"
+    working_dir: /src/web
+    command: ["npx", "vite", "--host", "0.0.0.0", "--port", "5173", "--strictPort"]
+    environment:
+      HOME: /tmp
+      VITE_API_TARGET: http://sidecar:9080
+      # The sidecar only accepts state-changing requests from PUBLIC_URL's origin; the dev proxy presents it.
+      VITE_PUBLIC_URL: ${PUBLIC_URL:?}
+    volumes:
+      - ..:/src
+    ports:
+      - "127.0.0.1:18173:5173"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [mtx]
+    mem_limit: 2g # Vite with Tailwind and the pre-bundled dependencies settles at about 1.1 GB
+    pids_limit: 256
+    depends_on: [sidecar]

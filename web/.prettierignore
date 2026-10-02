@@ -1,0 +1,5 @@
+dist
+coverage
+package-lock.json
+src/api/mediamtx-openapi.d.ts
+src/api/mediamtx-settings.json

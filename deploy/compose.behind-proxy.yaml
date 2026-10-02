@@ -1,0 +1,22 @@
+# Behind your own reverse proxy (Caddy, nginx, Traefik, ...): the proxy terminates HTTPS for DOMAIN and forwards to
+# the sidecar's plain HTTP on 127.0.0.1:8080. Use it on top of compose.yaml:
+#
+#   docker compose -f compose.yaml -f deploy/compose.behind-proxy.yaml up -d
+#
+# The proxy must pass Host and set X-Forwarded-For and X-Forwarded-Proto, and keep long responses (the live event
+# stream) unbuffered. TRUSTED_PROXIES is the proxy's address as the sidecar sees it: for a proxy on this host, the
+# stack network's gateway (MTX_SUBNET's .1). Proxy examples: docs/behind-a-proxy.md.
+services:
+  sidecar:
+    environment:
+      MTXUI_TLS: "off"
+      MTXUI_TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.29.42.1/32}
+      MTXUI_STACK_SUBNET: ${MTX_SUBNET:-172.29.42.0/24}
+    ports: !override
+      - "${UI_BIND:-127.0.0.1}:${UI_PORT:-8080}:9080"
+
+networks:
+  mtx:
+    ipam:
+      config:
+        - subnet: ${MTX_SUBNET:-172.29.42.0/24}

@@ -1,0 +1,47 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - errorlint
+    - gocritic
+    - gosec
+    - misspell
+    - nilerr
+    - noctx
+    - nolintlint
+    - revive
+    - unconvert
+    - unparam
+    - usestdlibvars
+  settings:
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+  exclusions:
+    presets:
+      - std-error-handling
+      - common-false-positives
+    rules:
+      # Tests and the test-only MediaMTX runner: no caller contexts needed, and fixtures are not credentials.
+      - path: (_test\.go|internal/mtxtest/)
+        linters: [noctx, gosec]
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      module-path: mtxui # without it, gofumpt takes the dotless module path for the standard library
+    goimports:
+      local-prefixes:
+        - mtxui

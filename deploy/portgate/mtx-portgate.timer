@@ -1,0 +1,12 @@
+# Every minute: closes exposure that has expired (even with the sidecar down) and applies any request a path event
+# missed.
+[Unit]
+Description=Enforce MediaMTX UI exposure expiry (mtx-portgate)
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

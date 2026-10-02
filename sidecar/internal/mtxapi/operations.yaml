@@ -1,0 +1,346 @@
+# Every operation of the MediaMTX Control API (spec/mediamtx/openapi.yaml) and how this project uses it.
+# `./dev test` and `./dev gen-check` fail when this list and the vendored spec disagree, so a MediaMTX bump
+# forces a decision for every new, changed or removed operation. docs/api-coverage.md is generated from it.
+#
+# access: the minimum UI role for which the sidecar's API proxy forwards the call.
+#   viewer < operator < admin   UI roles; a higher role may do everything a lower one may
+#   sidecar                     called only by the sidecar itself; never proxied for browsers
+#   unused                      never called; the note says why
+# phase: the development phase whose UI covers the operation (0 for unused ones).
+# query: the query parameters the spec declares; the proxy forwards only these.
+# redact: response fields the proxy removes (from the object and from each of its items) before the browser sees them.
+operations:
+  - id: info
+    method: GET
+    path: /v3/info
+    area: Dashboard
+    phase: 2
+    access: viewer
+
+  - id: authJwksRefresh
+    method: POST
+    path: /v3/auth/jwks/refresh
+    access: unused
+    note: authMethod is http, so there is no JWKS to refresh.
+
+  - id: configGlobalGet
+    method: GET
+    path: /v3/config/global/get
+    area: Global config
+    phase: 3
+    access: sidecar
+    note: Effective config for apply-and-verify and drift detection. The UI reads config through the sidecar's writer, which redacts secrets.
+  - id: configGlobalSet
+    method: PATCH
+    path: /v3/config/global/patch
+    access: unused
+    note: Runtime-only; the next file reload discards it (verified). Persistent config goes through the sidecar's file writer.
+  - id: configPathDefaultsGet
+    method: GET
+    path: /v3/config/path-defaults/get
+    area: Path defaults
+    phase: 3
+    access: sidecar
+    note: Effective path defaults for apply-and-verify.
+  - id: configPathDefaultsPatch
+    method: PATCH
+    path: /v3/config/path-defaults/patch
+    access: unused
+    note: Runtime-only, like configGlobalSet.
+  - id: configPathsList
+    method: GET
+    path: /v3/config/paths/list
+    query: [page, itemsPerPage]
+    area: Paths
+    phase: 3
+    access: sidecar
+    note: Effective path configs; paths present here but not in the file are flagged runtime-only.
+  - id: configPathsGet
+    method: GET
+    path: /v3/config/paths/get/{name}
+    area: Paths
+    phase: 3
+    access: sidecar
+  - id: configPathsAdd
+    method: POST
+    path: /v3/config/paths/add/{name}
+    access: unused
+    note: Runtime-only, like configGlobalSet.
+  - id: configPathsPatch
+    method: PATCH
+    path: /v3/config/paths/patch/{name}
+    access: unused
+    note: Runtime-only, like configGlobalSet.
+  - id: configPathsReplace
+    method: POST
+    path: /v3/config/paths/replace/{name}
+    access: unused
+    note: Runtime-only, like configGlobalSet.
+  - id: configPathsDelete
+    method: DELETE
+    path: /v3/config/paths/delete/{name}
+    access: unused
+    note: Runtime-only, like configGlobalSet.
+
+  - id: hlsMuxersList
+    method: GET
+    path: /v3/hls/muxers/list
+    query: [page, itemsPerPage]
+    area: Connections
+    phase: 2
+    access: operator
+  - id: hlsMuxersGet
+    method: GET
+    path: /v3/hls/muxers/get/{name}
+    area: Connections
+    phase: 2
+    access: operator
+  - id: hlssessionsList
+    method: GET
+    path: /v3/hls/sessions/list
+    query: [page, itemsPerPage]
+    area: Connections
+    phase: 2
+    access: operator
+    note: Includes client addresses.
+  - id: hlssessionsGet
+    method: GET
+    path: /v3/hls/sessions/get/{id}
+    area: Connections
+    phase: 2
+    access: operator
+  - id: hlssessionsKick
+    method: POST
+    path: /v3/hls/sessions/kick/{id}
+    area: Connections
+    phase: 2
+    access: operator
+
+  - id: pathsList
+    method: GET
+    path: /v3/paths/list
+    query: [page, itemsPerPage]
+    area: Paths
+    phase: 2
+    access: viewer
+  - id: pathsGet
+    method: GET
+    path: /v3/paths/get/{name}
+    area: Paths
+    phase: 2
+    access: viewer
+  - id: pathsForwardDestsList
+    method: GET
+    path: /v3/paths/forward-dests/list
+    query: [path, page, itemsPerPage]
+    redact: [conf]
+    area: Paths
+    phase: 3
+    access: admin
+    note: Items carry the deprecated `conf` (destination URL with credentials or stream key, WHIP bearer token); the proxy must strip it.
+  - id: pathsForwardDestsGet
+    method: GET
+    path: /v3/paths/forward-dests/get
+    query: [id, path]
+    redact: [conf]
+    area: Paths
+    phase: 3
+    access: admin
+    note: Same secrets as pathsForwardDestsList.
+  - id: pathsStaticSourcesGet
+    method: GET
+    path: /v3/paths/static-sources/get/{name}
+    area: Paths
+    phase: 2
+    access: operator
+    note: Includes the upstream camera or server address.
+
+  - id: rtspConnsList
+    method: GET
+    path: /v3/rtsp/conns/list
+    query: [page, itemsPerPage]
+    area: Connections
+    phase: 2
+    access: operator
+    note: Includes client addresses.
+  - id: rtspConnsGet
+    method: GET
+    path: /v3/rtsp/conns/get/{id}
+    area: Connections
+    phase: 2
+    access: operator
+  - id: rtspSessionsList
+    method: GET
+    path: /v3/rtsp/sessions/list
+    query: [page, itemsPerPage]
+    area: Connections
+    phase: 2
+    access: operator
+  - id: rtspSessionsGet
+    method: GET
+    path: /v3/rtsp/sessions/get/{id}
+    area: Connections
+    phase: 2
+    access: operator
+  - id: rtspSessionsKick
+    method: POST
+    path: /v3/rtsp/sessions/kick/{id}
+    area: Connections
+    phase: 2
+    access: operator
+
+  - id: rtspsConnsList
+    method: GET
+    path: /v3/rtsps/conns/list
+    query: [page, itemsPerPage]
+    area: Connections
+    phase: 2
+    access: operator
+  - id: rtspsConnsGet
+    method: GET
+    path: /v3/rtsps/conns/get/{id}
+    area: Connections
+    phase: 2
+    access: operator
+  - id: rtspsSessionsList
+    method: GET
+    path: /v3/rtsps/sessions/list
+    query: [page, itemsPerPage]
+    area: Connections
+    phase: 2
+    access: operator
+  - id: rtspsSessionsGet
+    method: GET
+    path: /v3/rtsps/sessions/get/{id}
+    area: Connections
+    phase: 2
+    access: operator
+  - id: rtspsSessionsKick
+    method: POST
+    path: /v3/rtsps/sessions/kick/{id}
+    area: Connections
+    phase: 2
+    access: operator
+
+  - id: rtmpConnsList
+    method: GET
+    path: /v3/rtmp/conns/list
+    query: [page, itemsPerPage]
+    area: Connections
+    phase: 2
+    access: operator
+  - id: rtmpConnectionsGet
+    method: GET
+    path: /v3/rtmp/conns/get/{id}
+    area: Connections
+    phase: 2
+    access: operator
+  - id: rtmpConnsKick
+    method: POST
+    path: /v3/rtmp/conns/kick/{id}
+    area: Connections
+    phase: 2
+    access: operator
+
+  - id: rtmpsConnsList
+    method: GET
+    path: /v3/rtmps/conns/list
+    query: [page, itemsPerPage]
+    area: Connections
+    phase: 2
+    access: operator
+  - id: rtmpsConnectionsGet
+    method: GET
+    path: /v3/rtmps/conns/get/{id}
+    area: Connections
+    phase: 2
+    access: operator
+  - id: rtmpsConnsKick
+    method: POST
+    path: /v3/rtmps/conns/kick/{id}
+    area: Connections
+    phase: 2
+    access: operator
+
+  - id: srtConnsList
+    method: GET
+    path: /v3/srt/conns/list
+    query: [page, itemsPerPage]
+    area: Connections
+    phase: 2
+    access: operator
+  - id: srtConnsGet
+    method: GET
+    path: /v3/srt/conns/get/{id}
+    area: Connections
+    phase: 2
+    access: operator
+  - id: srtConnsKick
+    method: POST
+    path: /v3/srt/conns/kick/{id}
+    area: Connections
+    phase: 2
+    access: operator
+
+  - id: webrtcSessionsList
+    method: GET
+    path: /v3/webrtc/sessions/list
+    query: [page, itemsPerPage]
+    area: Connections
+    phase: 2
+    access: operator
+  - id: webrtcSessionsGet
+    method: GET
+    path: /v3/webrtc/sessions/get/{id}
+    area: Connections
+    phase: 2
+    access: operator
+  - id: webrtcSessionsKick
+    method: POST
+    path: /v3/webrtc/sessions/kick/{id}
+    area: Connections
+    phase: 2
+    access: operator
+
+  - id: moqSessionsList
+    method: GET
+    path: /v3/moq/sessions/list
+    query: [page, itemsPerPage]
+    area: Connections
+    phase: 2
+    access: operator
+    note: MoQ is off in the seed config; the list is empty unless an admin enables it.
+  - id: moqSessionsGet
+    method: GET
+    path: /v3/moq/sessions/get/{id}
+    area: Connections
+    phase: 2
+    access: operator
+  - id: moqSessionsKick
+    method: POST
+    path: /v3/moq/sessions/kick/{id}
+    area: Connections
+    phase: 2
+    access: operator
+
+  - id: recordingsList
+    method: GET
+    path: /v3/recordings/list
+    query: [page, itemsPerPage]
+    area: Recordings
+    phase: 5
+    access: viewer
+  - id: recordingsGet
+    method: GET
+    path: /v3/recordings/get/{name}
+    area: Recordings
+    phase: 5
+    access: viewer
+  - id: recordingsSegmentsDelete
+    method: DELETE
+    path: /v3/recordings/segments/delete
+    query: [path, start]
+    area: Recordings
+    phase: 5
+    access: operator
+    note: The only way recordings are deleted; the sidecar mounts the recordings volume read-only.

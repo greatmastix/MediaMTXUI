@@ -1,0 +1,18 @@
+{
+  "driver": "ufw",
+  "desired": "/var/lib/mtx-portgate-requests/desired.json",
+  "stateDir": "/var/lib/mtx-portgate",
+  "ports": {
+    "rtsp": { "proto": "tcp", "port": 8554 },
+    "rtmp": { "proto": "tcp", "port": 1935 },
+    "srt": { "proto": "udp", "port": 8890 },
+    "webrtc": { "proto": "udp", "port": 8189 }
+  },
+  "allowAnySource": true,
+  "maxTTLAnySource": "12h",
+  "maxTTL": "720h",
+  "permanentOK": false,
+  "maxSources": 8,
+  "minPrefixV4": 16,
+  "minPrefixV6": 48
+}

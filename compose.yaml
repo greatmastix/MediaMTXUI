@@ -1,0 +1,88 @@
+# MediaMTX UI: MediaMTX with a web UI, on any Docker host.
+#
+#   1. Point a domain at this host and open ports 80 and 443 (the UI and its certificate) and the stream ports
+#      below that you use.
+#   2. Copy .env.example to .env and set DOMAIN (and ACME_EMAIL).
+#   3. docker compose up -d
+#   4. Open https://<DOMAIN>, and finish the setup with the token from `docker compose logs sidecar`.
+#
+# The sidecar gets its certificate from Let's Encrypt by itself and keeps it renewed. Everything else is optional:
+# see .env.example and docs/config.md. Behind your own reverse proxy: deploy/compose.behind-proxy.yaml.
+name: mediamtx-ui
+
+x-hardened: &hardened
+  user: "10002:10002"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  networks: [mtx]
+  logging:
+    driver: json-file
+    options: { max-size: 10m, max-file: "3" }
+
+services:
+  mediamtx:
+    <<: *hardened
+    image: bluenviron/mediamtx:1.21.1@sha256:5ce2a948eb68df06ce2e13870db8df8e30d516ac4dc40e04bfe8aee3bdf7be40
+    command: ["/config/mediamtx.yml"]
+    init: true # reaps processes started by runOn* hooks
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    volumes:
+      - data-config:/config:ro # written only by the sidecar, after validation
+      - ${RECORDINGS_PATH:-data-recordings}:/recordings
+      - data-logs:/logs
+      - data-hooks:/hooks:ro
+      - data-holding:/holding:ro # holding clips: the same path as in the sidecar, which names them by it
+    # Stream ports only. The API (9997), metrics (9998), playback (9996), pprof (9999), HLS (8888) and WebRTC
+    # signalling (8889) stay on the stack network: the sidecar serves what browsers need, behind its sign-in.
+    ports:
+      - "${STREAM_BIND:-0.0.0.0}:8554:8554/tcp" # RTSP
+      - "${STREAM_BIND:-0.0.0.0}:1935:1935/tcp" # RTMP
+      - "${STREAM_BIND:-0.0.0.0}:8890:8890/udp" # SRT
+      - "${STREAM_BIND:-0.0.0.0}:8189:8189/udp" # WebRTC media (browsers watching, WHIP encoders)
+    mem_limit: 2g
+    pids_limit: 512
+    depends_on:
+      sidecar:
+        condition: service_healthy
+
+  sidecar:
+    <<: *hardened
+    image: ghcr.io/greatmastix/mediamtxui:${MTXUI_VERSION:-latest}
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    environment:
+      # Every setting: docs/config.md. Secrets are never set here: the sidecar generates them into its state.
+      MTXUI_PUBLIC_URL: https://${DOMAIN:?set DOMAIN in .env}
+      MTXUI_PUBLIC_HOST: ${STREAM_HOST:-${DOMAIN}}
+      MTXUI_TLS: acme
+      MTXUI_ACME_EMAIL: ${ACME_EMAIL:-}
+      MTXUI_ACME_DIRECTORY: ${ACME_DIRECTORY:-}
+      MTXUI_RECORDINGS_MAX_GB: ${RECORDINGS_MAX_GB:-0}
+      MTXUI_HISTORY_DAYS: ${HISTORY_DAYS:-}
+      MTXUI_LOG_LEVEL: ${LOG_LEVEL:-}
+    volumes:
+      - data-config:/data/config
+      - ${RECORDINGS_PATH:-data-recordings}:/data/recordings:ro # deletion goes through MediaMTX's API
+      - data-logs:/data/logs
+      - data-state:/data/state # database, secrets, certificates
+      - data-hooks:/data/hooks
+      - data-holding:/holding
+      - ${BACKUPS_PATH:-data-backups}:/data/backups # encrypted backups: copy them off the host now and then
+    ports:
+      - "${HTTP_BIND:-0.0.0.0}:${HTTP_PORT:-80}:9082" # certificate challenges, and a redirect to HTTPS
+      - "${HTTPS_BIND:-0.0.0.0}:${HTTPS_PORT:-443}:9080" # the UI
+    mem_limit: 512m
+    pids_limit: 256
+
+networks:
+  mtx:
+
+volumes:
+  data-config:
+  data-recordings:
+  data-logs:
+  data-state:
+  data-hooks:
+  data-holding:
+  data-backups:

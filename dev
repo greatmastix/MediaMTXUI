@@ -1,0 +1,673 @@
+#!/usr/bin/env bash
+# dev: task runner for mediamtx-ui. Needs only bash and Docker. Every toolchain runs in a pinned container
+# (deploy/tools.env) as your own user, with the repo mounted at /src and caches under .cache/.
+# Run `./dev help` for the commands.
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+cd "$ROOT"
+# shellcheck source=deploy/tools.env
+. deploy/tools.env
+
+USER_IDS="$(id -u):$(id -g)"
+CACHE="$ROOT/.cache"
+DEV_PROJECT=mtxdev
+E2E_PROJECT=mtxe2e
+
+usage() {
+  cat <<'EOF'
+Usage: ./dev <command> [args]
+
+Checks
+  ci                    lint + test + gen-check + spec-verify + build (what CI runs)
+  lint                  golangci-lint, eslint, prettier, tsc, shellcheck, compose and pin consistency
+  fmt                   format Go and web sources in place
+  test [pkg...]         Go tests (with -race) and Vitest; with Go packages, only those
+  gen                   regenerate web/src/api/mediamtx-openapi.d.ts and mediamtx-settings.json, docs/api-coverage.md
+                        and docs/config.md
+  gen-check             fail if the vendored spec or any generated file drifted
+  spec-verify           fail if the vendored spec differs from upstream at the pinned version (network)
+  build                 build the sidecar image as mediamtx-ui:dev
+
+Dev stack (project mtxdev, published on 127.0.0.1:18xxx only)
+  up [--wizard]         start MediaMTX, sidecar, test publisher and Vite; set up a dev admin (or leave the wizard to you)
+  check                 check that path "test" is ready, through the sidecar's API proxy
+  logs [service...]     follow logs
+  down                  stop and remove the stack (containers, network, volumes)
+  e2e [--slow] [args]   run Playwright against a throwaway stack (project mtxe2e, nothing published), e.g.
+                        ./dev e2e tests/watch.spec.ts; the stack's logs are kept in .cache/e2e-logs.
+                        --slow adds the tests tagged @slow; SOAK_MINUTES=10 ./dev e2e tests/soak.spec.ts runs the
+                        9-tile soak test
+
+Maintenance
+  offline-clips         remake the holding screen's offline clips (sidecar/internal/app/offline/, make.sh) with the
+                        pinned MediaMTX ffmpeg image
+  deps                  download Go modules and install web dependencies
+  bump-mediamtx <ver>   vendor the OpenAPI spec of another MediaMTX release and update every pin
+  screenshots           take the README's screenshots (docs/screenshots/) from a fresh e2e stack
+  clean                 remove caches, node_modules, build output and dev data
+EOF
+}
+
+die() {
+  echo "dev: $*" >&2
+  exit 1
+}
+step() { printf '\n== %s\n' "$*"; }
+sha256() {
+  if command -v sha256sum >/dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi | cut -d' ' -f1
+}
+
+# run IMAGE WORKDIR [docker-run-args...] -- CMD...
+# A toolchain container: runs as you, repo at /src, caches at /cache, no capabilities, no network unless NET=bridge.
+run() {
+  local image=$1 wd=$2 args=()
+  shift 2
+  while [[ $# -gt 0 && $1 != -- ]]; do
+    args+=("$1")
+    shift
+  done
+  [[ $# -gt 0 ]] && shift
+  mkdir -p "$CACHE"
+  docker run --rm --init --user "$USER_IDS" --network "${NET:-none}" \
+    --cap-drop ALL --security-opt no-new-privileges --memory 6g --cpus 6 --pids-limit 4096 \
+    -e HOME=/tmp -e CI="${CI:-}" -v "$ROOT:/src" -v "$CACHE:/cache" -w "/src/$wd" \
+    ${args[@]+"${args[@]}"} "$image" "$@"
+}
+# -modcacherw: Go writes its module cache read-only by default, which would make `rm -rf .cache` fail.
+go_() {
+  run "$GO_IMAGE" sidecar -e GOCACHE=/cache/go/build -e GOMODCACHE=/cache/go/mod -e GOTOOLCHAIN=local \
+    -e GOFLAGS=-modcacherw -- "$@"
+}
+node_() { run "$NODE_IMAGE" web -e npm_config_cache=/cache/npm -- "$@"; }
+golangci() {
+  run "$GOLANGCI_IMAGE" sidecar -e GOCACHE=/cache/go/build -e GOMODCACHE=/cache/go/mod -e GOTOOLCHAIN=local \
+    -e GOFLAGS=-modcacherw -e GOLANGCI_LINT_CACHE=/cache/golangci -- golangci-lint "$@"
+}
+gendocs() {
+  mediamtx_bin
+  go_ go run ./cmd/gendocs -spec ../spec/mediamtx/openapi.yaml -lock ../spec/mediamtx/openapi.lock -docs ../docs \
+    -web ../web/src/api -reference "/cache/mediamtx/$MEDIAMTX_VERSION/mediamtx.yml" "$@"
+}
+
+# The pinned MediaMTX binary and reference config, extracted once per version, for the Go integration tests.
+mediamtx_bin() {
+  local dir=$CACHE/mediamtx/$MEDIAMTX_VERSION cid
+  if [[ ! -x $dir/mediamtx || ! -f $dir/mediamtx.yml ]]; then
+    mkdir -p "$dir"
+    cid=$(docker create "$MEDIAMTX_IMAGE")
+    docker cp "$cid:/mediamtx" "$dir/mediamtx" >/dev/null
+    docker cp "$cid:/mediamtx.yml" "$dir/mediamtx.yml" >/dev/null
+    docker rm "$cid" >/dev/null
+  fi
+}
+
+cmd_deps() {
+  step "deps"
+  NET=bridge go_ go mod download
+  web_deps
+}
+
+# npm ci only when package-lock.json changed since the last install.
+web_deps() {
+  local want stamp=web/node_modules/.lock-sha256
+  want=$(sha256 web/package-lock.json)
+  if [[ -f $stamp && $(<"$stamp") == "$want" ]]; then return 0; fi
+  NET=bridge node_ npm ci
+  echo "$want" >"$stamp"
+}
+
+# parallel NAME=FUNCTION...: runs the functions at once, each in a subshell with its output kept in
+# .cache/parallel/NAME.log, then prints the logs in order and fails if any failed. Their containers share the host's
+# CPUs, so a run takes about as long as its slowest job.
+parallel() {
+  local job name i dir="$CACHE/parallel" failed=() pids=() jobs=()
+  mkdir -p "$dir"
+  for job in "$@"; do
+    name=${job%%=*}
+    # shellcheck disable=SC2086 # "function args" splits into the command on purpose
+    ( ${job#*=} ) >"$dir/$name.log" 2>&1 &
+    pids+=("$!")
+    jobs+=("$name")
+  done
+  for i in "${!pids[@]}"; do
+    wait "${pids[$i]}" || failed+=("${jobs[$i]}")
+  done
+  for name in "${jobs[@]}"; do
+    step "$name"
+    cat "$dir/$name.log"
+  done
+  ((${#failed[@]} == 0)) || die "failed: ${failed[*]} (logs in .cache/parallel)"
+}
+
+# The image is built for amd64, arm64 and arm/v7 too: everything must also compile for the 32-bit one.
+lint_go() {
+  golangci run ./...
+  go_ env GOOS=linux GOARCH=arm GOARM=7 go build -o /dev/null ./cmd/...
+  go_ env GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/...
+}
+lint_types() { node_ npm run -s typecheck; }
+# ESLint's cache is per file, but its type-aware rules also depend on other files, so a cached run can miss a new
+# finding in an unchanged file: ./dev lint uses the cache (the quick loop), ./dev ci never does.
+lint_eslint() {
+  if [[ ${1:-} == cached ]]; then
+    node_ npx eslint . --max-warnings 0 --cache --cache-strategy content --cache-location node_modules/.cache/eslint/
+  else
+    node_ npx eslint . --max-warnings 0
+  fi
+}
+lint_rest() {
+  node_ npx prettier --check --cache --cache-location node_modules/.cache/prettier-cache.json .
+  node_ npx prettier --config .prettierrc.json --check ../e2e/tests ../e2e/playwright.config.ts
+  local scripts
+  shopt -s nullglob
+  scripts=(dev scripts/*.sh)
+  shopt -u nullglob
+  docker run --rm --network none -v "$ROOT:/mnt:ro" -w /mnt "$SHELLCHECK_IMAGE" -x "${scripts[@]}"
+  compose_lint .env.example compose.yaml
+  compose_lint .env.example compose.yaml deploy/compose.behind-proxy.yaml deploy/compose.exposure.yaml
+  dev_compose "$DEV_PROJECT" --profile vite config -q
+  e2e_compose --profile e2e config -q
+  pins_check
+}
+
+cmd_lint() {
+  cmd_deps
+  parallel "lint: go=lint_go" "lint: web types=lint_types" "lint: web eslint=lint_eslint cached" \
+    "lint: formatting, shell, compose, pins=lint_rest"
+}
+
+# compose_lint ENV-FILE FILE...: the static hardening checks of scripts/compose-lint.mjs on a rendered compose file.
+compose_lint() { # ENV-FILE COMPOSE-FILE...
+  local env=$1 files=()
+  shift
+  for f in "$@"; do files+=(-f "$f"); done
+  docker compose --project-directory . "${files[@]}" --env-file "$env" config --format json |
+    docker run --rm -i --network none -v "$ROOT/scripts:/scripts:ro" "$NODE_IMAGE" node /scripts/compose-lint.mjs
+}
+
+cmd_fmt() {
+  cmd_deps
+  golangci fmt ./...
+  node_ npm run -s format
+  node_ npx prettier --config .prettierrc.json --write ../e2e/tests ../e2e/playwright.config.ts
+}
+
+pin_in() { # file, expected text
+  grep -qF -- "$2" "$1" || {
+    echo "pins: $1 should contain '$2' (deploy/tools.env)" >&2
+    return 1
+  }
+}
+pins_check() {
+  local ok=0 pw=${PLAYWRIGHT_IMAGE#*:v}
+  pw=${pw%%-*}
+  pin_in Dockerfile "ARG GO_IMAGE=$GO_IMAGE" || ok=1
+  pin_in Dockerfile "ARG NODE_IMAGE=$NODE_IMAGE" || ok=1
+  pin_in Dockerfile "ARG MEDIAMTX_VERSION=$MEDIAMTX_VERSION" || ok=1
+  pin_in Dockerfile "ARG MEDIAMTX_IMAGE=$MEDIAMTX_IMAGE" || ok=1
+  pin_in compose.yaml "    image: $MEDIAMTX_IMAGE" || ok=1
+  pin_in spec/mediamtx/openapi.lock "version=$MEDIAMTX_VERSION" || ok=1
+  pin_in e2e/package.json "\"@playwright/test\": \"$pw\"" || ok=1
+  [[ $MEDIAMTX_IMAGE == "bluenviron/mediamtx:$MEDIAMTX_VERSION@sha256:"* ]] || {
+    echo "pins: MEDIAMTX_IMAGE is not bluenviron/mediamtx:$MEDIAMTX_VERSION@sha256:..." >&2
+    ok=1
+  }
+  [[ $TEST_PUBLISHER_IMAGE == "bluenviron/mediamtx:$MEDIAMTX_VERSION-ffmpeg@sha256:"* ]] || {
+    echo "pins: TEST_PUBLISHER_IMAGE is not bluenviron/mediamtx:$MEDIAMTX_VERSION-ffmpeg@sha256:..." >&2
+    ok=1
+  }
+  ((ok == 0)) || die "pins drifted from deploy/tools.env"
+  echo "pins ok"
+}
+
+test_go() {
+  mediamtx_bin
+  go_ env MTXUI_TEST_MEDIAMTX_BIN="/cache/mediamtx/$MEDIAMTX_VERSION/mediamtx" \
+    MTXUI_TEST_MEDIAMTX_REFERENCE="/cache/mediamtx/$MEDIAMTX_VERSION/mediamtx.yml" go test -race -count=1 "${@:-./...}"
+}
+test_web() { node_ npm test --silent; }
+
+cmd_test() {
+  cmd_deps
+  if [[ $# -gt 0 ]]; then
+    step "test: go"
+    test_go "$@"
+    return
+  fi
+  mediamtx_bin # once, before the jobs that use it
+  parallel "test: go=test_go" "test: web=test_web"
+}
+
+cmd_gen() {
+  cmd_deps
+  step "gen: TypeScript from the vendored spec"
+  node_ npm run -s gen:types
+  step "gen: docs/api-coverage.md and docs/config.md"
+  gendocs
+}
+
+cmd_gen_check() {
+  cmd_deps
+  gen_check
+}
+
+gen_check() {
+  step "gen-check: vendored spec matches its lock"
+  local want got
+  want=$(sed -n 's/^sha256=//p' spec/mediamtx/openapi.lock)
+  got=$(sha256 spec/mediamtx/openapi.yaml)
+  [[ $got == "$want" ]] ||
+    die "spec/mediamtx/openapi.yaml changed (sha256 $got, lock says $want): restore it, or vendor a release with ./dev bump-mediamtx"
+  echo "spec ok (sha256 $got)"
+  step "gen-check: generated TypeScript is current"
+  mkdir -p "$CACHE/tmp"
+  node_ npx openapi-typescript ../spec/mediamtx/openapi.yaml -o /cache/tmp/mediamtx-openapi.d.ts >/dev/null
+  cmp -s "$CACHE/tmp/mediamtx-openapi.d.ts" web/src/api/mediamtx-openapi.d.ts ||
+    die "web/src/api/mediamtx-openapi.d.ts is stale or was edited by hand: run ./dev gen"
+  echo "types ok"
+  step "gen-check: generated docs"
+  gendocs -check
+  echo "docs ok"
+}
+
+cmd_spec_verify() {
+  step "spec-verify: vendored spec matches upstream v$MEDIAMTX_VERSION"
+  local url want got
+  url=$(sed -n 's/^url=//p' spec/mediamtx/openapi.lock)
+  want=$(sed -n 's/^sha256=//p' spec/mediamtx/openapi.lock)
+  # shellcheck disable=SC2016 # JavaScript, not shell expansions
+  got=$(NET=bridge run "$NODE_IMAGE" . -- node --input-type=module -e '
+    const res = await fetch(process.argv[1]);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    console.log((await import("node:crypto")).createHash("sha256").update(buf).digest("hex"));
+  ' "$url")
+  [[ $got == "$want" ]] || die "upstream spec at $url has sha256 $got, the lock says $want"
+  echo "upstream ok"
+}
+
+version() { git describe --tags --always --dirty 2>/dev/null || echo dev; }
+
+cmd_build() {
+  step "build: mediamtx-ui:dev"
+  docker build --build-arg VERSION="$(version)" -t mediamtx-ui:dev .
+}
+
+cmd_ci() {
+  cmd_deps
+  mediamtx_bin
+  parallel "lint: go=lint_go" "lint: web types=lint_types" "lint: web eslint=lint_eslint" \
+    "lint: formatting, shell, compose, pins=lint_rest" "test: go=test_go" "test: web=test_web" \
+    "gen-check=gen_check" "spec-verify=cmd_spec_verify" "build=cmd_build"
+  step "ci: all checks passed"
+}
+
+# dev_compose PROJECT COMPOSE-ARGS...: the dev or e2e stack under its own project name, subnet and data dir.
+dev_compose() {
+  local project=$1 subnet overlay
+  shift
+  case $project in
+    "$DEV_PROJECT") subnet=172.29.43.0/24 overlay=deploy/compose.dev.yml ;;
+    "$E2E_PROJECT") subnet=172.29.44.0/24 overlay=deploy/compose.e2e.yml ;;
+    *) die "unknown compose project $project" ;;
+  esac
+  DEV_UID=$(id -u) DEV_GID=$(id -g) DATA_DIR="./.dev/$project" PORTGATE_STATUS_DIR="./.dev/$project/portgate-status" \
+    MTX_SUBNET=$subnet \
+    MEDIAMTX_IMAGE=$MEDIAMTX_IMAGE MEDIAMTX_VERSION=$MEDIAMTX_VERSION TEST_PUBLISHER_IMAGE=$TEST_PUBLISHER_IMAGE \
+    NODE_IMAGE=$NODE_IMAGE PLAYWRIGHT_IMAGE=$PLAYWRIGHT_IMAGE PEBBLE_IMAGE=$PEBBLE_IMAGE \
+    docker compose --project-directory deploy -p "$project" --env-file deploy/dev/dev.env \
+    -f compose.yaml -f deploy/compose.test.yml -f "$overlay" "$@"
+}
+e2e_compose() { dev_compose "$E2E_PROJECT" "$@"; }
+
+dev_env() { sed -n "s/^$1=//p" deploy/dev/dev.env; } # a value from deploy/dev/dev.env
+
+# sidecar_exec PROJECT ARGS...: run an mtxui subcommand inside the stack's sidecar (stdin passes through).
+sidecar_exec() {
+  local project=$1
+  shift
+  dev_compose "$project" exec -T sidecar /mtxui "$@"
+}
+
+# The test publisher's dev-only credential; exit code 3 means it exists already.
+bootstrap_publisher() {
+  local rc=0
+  dev_env DEV_PUBLISHER_SECRET | sidecar_exec "$1" credential add --name devpub --actions publish --paths test \
+    --secret-stdin >/dev/null || rc=$?
+  ((rc == 0 || rc == 3)) || die "could not create the publisher credential (exit $rc)"
+}
+
+# The setup token the sidecar printed at startup, or nothing once setup is done (never a failure: callers decide).
+setup_token() { dev_compose "$1" logs sidecar 2>/dev/null | grep -oE '[A-Z2-7]{4}(-[A-Z2-7]{4}){7}' | tail -1 || true; }
+
+data_dirs() { # project
+  local d
+  for d in config recordings logs state hooks portgate portgate-status holding backups; do mkdir -p "deploy/.dev/$1/$d"; done
+}
+
+cmd_up() {
+  local wizard=0 rc=0 token
+  [[ ${1:-} == --wizard ]] && wizard=1
+  web_deps
+  data_dirs "$DEV_PROJECT"
+  step "up: $DEV_PROJECT"
+  dev_compose "$DEV_PROJECT" --profile vite up -d --build --wait --remove-orphans
+  scripts/compose-assert.sh "$DEV_PROJECT" ports-dev
+  scripts/compose-assert.sh "$DEV_PROJECT" hardening
+  step "up: publisher credential"
+  bootstrap_publisher "$DEV_PROJECT"
+  if ((wizard)); then
+    token=$(setup_token "$DEV_PROJECT")
+    if [[ -n $token ]]; then
+      printf '\nSetup is pending: open /setup and enter the setup token %s\n' "$token"
+      printf 'The test publisher starts once setup switches RTSP on.\n'
+    else
+      printf '\nSetup is already done in this stack (./dev clean starts over).\n'
+    fi
+  else
+    step "up: setup (dev admin)"
+    dev_env DEV_ADMIN_PASSWORD | sidecar_exec "$DEV_PROJECT" setup --username "$(dev_env DEV_ADMIN_USER)" \
+      --ingest rtsp,rtmp,srt || rc=$?
+    ((rc == 0 || rc == 3)) || die "setup failed (exit $rc)"
+    cmd_check
+  fi
+  echo
+  echo "UI (built, served by the sidecar)  http://127.0.0.1:18080 (127.0.0.1, not localhost: sign-in must come from PUBLIC_URL)"
+  echo "UI (Vite dev server, hot reload)   http://127.0.0.1:18173"
+  ((wizard)) || echo "Dev admin                          $(dev_env DEV_ADMIN_USER) / $(dev_env DEV_ADMIN_PASSWORD)"
+  echo "Watch the test stream              docker exec mtxdev-sidecar-1 /mtxui credential add --name viewer --actions read --paths test"
+  echo "                                   then rtsp://viewer:<secret>@127.0.0.1:18554/test"
+  echo "From your machine, tunnel first:   ssh -N -L 18080:127.0.0.1:18080 -L 18173:127.0.0.1:18173 -L 18554:127.0.0.1:18554 <this host>"
+}
+
+cmd_check() {
+  step "check: path \"test\" is ready (through the sidecar's API proxy)"
+  docker run --rm --network "${DEV_PROJECT}_mtx" --user "$USER_IDS" --cap-drop ALL --security-opt no-new-privileges \
+    -v "$ROOT/scripts:/scripts:ro" "$NODE_IMAGE" node /scripts/wait-path-ready.mjs http://sidecar:9080 \
+    "$(dev_env PUBLIC_URL)" test "$(dev_env DEV_ADMIN_USER):$(dev_env DEV_ADMIN_PASSWORD)" 90
+}
+
+cmd_logs() { dev_compose "$DEV_PROJECT" --profile vite logs -f --tail 100 "$@"; }
+
+cmd_down() {
+  step "down: $DEV_PROJECT"
+  dev_compose "$DEV_PROJECT" --profile vite down --volumes --remove-orphans
+  scripts/compose-assert.sh "$DEV_PROJECT" gone
+}
+
+e2e_teardown() {
+  [[ -n ${E2E_CONTROL_PID:-} ]] && kill "$E2E_CONTROL_PID" 2>/dev/null
+  docker ps -aq --filter "label=mtxui.e2e=$E2E_PROJECT" | xargs -r docker rm -f >/dev/null 2>&1 || true
+  e2e_compose --profile e2e down --volumes --remove-orphans >/dev/null 2>&1 || true
+  scripts/compose-assert.sh "$E2E_PROJECT" gone
+}
+
+# e2e_control DIR: carries out the Playwright tests' requests to stop or start the test publisher and to restart
+# MediaMTX, which the tests cannot do themselves (their container has no Docker access). A request is a file
+# NAME.req; the answer NAME.done holds the time, in epoch milliseconds, at which the action had completed.
+E2E_CONTROL_DIR=$CACHE/e2e-control
+e2e_control() {
+  local req name
+  while :; do
+    for req in "$E2E_CONTROL_DIR"/*.req; do
+      [[ -e $req ]] || continue
+      name=$(basename "$req" .req)
+      rm -f "$req"
+      case $name in
+        publisher-stop) docker stop -t 0 "$E2E_PROJECT-publisher-1" ;;
+        publisher-start) docker start "$E2E_PROJECT-publisher-1" ;;
+        # An outside edit MediaMTX rejects (an invalid transport), written into the config volume as the sidecar's uid.
+        config-break)
+          docker run --rm --network none --user 10002:10002 -v "${E2E_PROJECT}_data-config:/c" "$NODE_IMAGE" node -e '
+            const fs = require("fs"), f = "/c/mediamtx.yml";
+            fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("rtspTransports: [tcp]", "rtspTransports: [bogus]"));'
+          ;;
+        # Down for a few seconds, so the sidecar's once-a-second poll cannot miss the outage.
+        mediamtx-restart) docker stop -t 5 "$E2E_PROJECT-mediamtx-1" && sleep 3 && docker start "$E2E_PROJECT-mediamtx-1" ;;
+        # Fill the recordings volume with something that is not a recording, leaving about 2 MB free, so pruning cannot
+        # make room and the recordings guard trips; and take it away again.
+        recordings-fill)
+          # shellcheck disable=SC2016 # expanded inside the container
+          docker run --rm --network none --user 10002:10002 -v "${E2E_PROJECT}_data-recordings:/r" \
+            --entrypoint sh "$TEST_PUBLISHER_IMAGE" -c \
+            'avail=$(df -k /r | awk "NR==2 {print \$4}"); dd if=/dev/zero of=/r/filler bs=1024 count=$((avail - 2048)) 2>/dev/null'
+          ;;
+        # Make a user's sessions look like they last proved who they are long ago, so admin-level changes ask again
+        # (step-up). The user's name is in age-sessions.user.
+        age-sessions)
+          user=$(cat "$E2E_CONTROL_DIR/age-sessions.user") && rm -f "$E2E_CONTROL_DIR/age-sessions.user"
+          # shellcheck disable=SC2016 # expanded by node
+          docker run --rm --network none --user 10002:10002 -v "${E2E_PROJECT}_data-state:/s" -e U="$user" \
+            --entrypoint node "$NODE_IMAGE" -e '
+              const { DatabaseSync } = require("node:sqlite");
+              const db = new DatabaseSync("/s/mtxui.db");
+              db.exec("PRAGMA busy_timeout = 5000");
+              db.prepare("UPDATE sessions SET verified_at = 0 WHERE user_id = (SELECT id FROM users WHERE username = ?)").run(process.env.U);'
+          ;;
+        recordings-unfill)
+          docker run --rm --network none --user 10002:10002 -v "${E2E_PROJECT}_data-recordings:/r" \
+            --entrypoint rm "$TEST_PUBLISHER_IMAGE" -f /r/filler
+          ;;
+        # Publish over RTMP for a minute to the URL the test wrote (a stream page's server and key), from a throwaway
+        # container on the stack network (the test publisher's pids limit has no room for a second ffmpeg). ffmpeg
+        # ends when MediaMTX closes the connection; teardown removes what is left. rtmp-publish-bframes sends B-frames,
+        # as OBS's x264 does by default.
+        rtmp-publish | rtmp-publish-bframes)
+          x264="-preset ultrafast -tune zerolatency"
+          [[ $name == rtmp-publish-bframes ]] && x264="-preset veryfast -bf 2"
+          # shellcheck disable=SC2016 # $URL and $X264 are expanded inside the container, from its environment
+          url=$(cat "$E2E_CONTROL_DIR/rtmp-publish.url") && rm -f "$E2E_CONTROL_DIR/rtmp-publish.url" &&
+            docker run -d --rm --name "$E2E_PROJECT-rtmp-$RANDOM" --label "mtxui.e2e=$E2E_PROJECT" \
+              --network "${E2E_PROJECT}_mtx" --user 10002:10002 --read-only --cap-drop ALL \
+              --security-opt no-new-privileges --memory 256m --pids-limit 128 --cpus 1 \
+              -e URL="$url" -e X264="$x264" --entrypoint sh "$TEST_PUBLISHER_IMAGE" -c 'exec ffmpeg -hide_banner -loglevel error \
+                -re -f lavfi -i testsrc2=size=640x360:rate=30 -re -f lavfi -i sine=frequency=440:sample_rate=48000 \
+                -c:v libx264 $X264 -pix_fmt yuv420p -g 60 -b:v 800k \
+                -c:a aac -ac 2 -b:a 64k -t 60 -f flv "$URL"'
+          ;;
+        # The same, in the foreground for at most 5 s of stream, recording ffmpeg's exit code: non-zero when MediaMTX
+        # refuses the key (or the tracks). rtmp-try sends video only; rtmp-try-audio adds AAC stereo, as OBS sends.
+        rtmp-try | rtmp-try-audio)
+          url=$(cat "$E2E_CONTROL_DIR/rtmp-publish.url") && rm -f "$E2E_CONTROL_DIR/rtmp-publish.url"
+          local rc=0 audio=""
+          [[ $name == rtmp-try-audio ]] && audio="-f lavfi -i sine=frequency=440:sample_rate=48000 -c:a aac -ac 2"
+          # shellcheck disable=SC2016 # as above
+          timeout 30 docker run --rm --label "mtxui.e2e=$E2E_PROJECT" \
+            --network "${E2E_PROJECT}_mtx" --user 10002:10002 --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --memory 256m --pids-limit 128 --cpus 1 \
+            -e URL="$url" -e AUDIO="$audio" --entrypoint sh "$TEST_PUBLISHER_IMAGE" -c 'exec ffmpeg -hide_banner \
+              -loglevel error -re -f lavfi -i testsrc2=size=640x360:rate=30 $AUDIO -c:v libx264 -preset ultrafast \
+              -pix_fmt yuv420p -t 5 -f flv "$URL"' 2>/dev/null || rc=$?
+          echo "$rc" >"$E2E_CONTROL_DIR/rtmp-try.exit"
+          ;;
+        # Memory use of the stack's services, one JSON object per container, for the soak test.
+        stats)
+          docker stats --no-stream --format '{{json .}}' "$E2E_PROJECT-sidecar-1" "$E2E_PROJECT-mediamtx-1" \
+            >"$E2E_CONTROL_DIR/stats.tmp" && mv "$E2E_CONTROL_DIR/stats.tmp" "$E2E_CONTROL_DIR/stats.json"
+          ;;
+        *)
+          echo "e2e control: unknown request $name" >&2
+          continue
+          ;;
+      esac >/dev/null
+      date +%s%3N >"$E2E_CONTROL_DIR/$name.tmp" && mv "$E2E_CONTROL_DIR/$name.tmp" "$E2E_CONTROL_DIR/$name.done"
+    done
+    sleep 0.1
+  done
+}
+
+# Every file in the state volume is private and owned by 10002, and the setup token is gone once setup is done.
+check_state_files() {
+  docker run --rm --network none -v "${E2E_PROJECT}_data-state:/s:ro" -v "${E2E_PROJECT}_data-backups:/b:ro" \
+    "$NODE_IMAGE" node -e '
+    const fs = require("fs");
+    let bad = 0;
+    // Directories 700, files 600, all the sidecar'"'"'s: state/ (and what a restore moved aside) and backups/.
+    const check = (p) => {
+      const st = fs.statSync(p), dir = st.isDirectory(), want = dir ? "700" : "600";
+      const mode = (st.mode & 0o777).toString(8), ok = st.uid === 10002 && mode === want;
+      console.log(`${ok ? "ok " : "BAD"} ${p} uid=${st.uid} mode=${mode}`);
+      if (!ok) bad++;
+      if (dir) for (const f of fs.readdirSync(p)) check(p + "/" + f);
+    };
+    check("/s");
+    check("/b");
+    if (fs.existsSync("/s/setup-token")) { console.log("BAD the setup token survived setup"); bad++; }
+    process.exit(bad ? 1 : 0);'
+}
+
+# No secret the run used appears anywhere in the stack's logs: not in a logged URL, not in a logged auth request. The
+# logs stand in for Caddy's access log, which records full URLs. The tests record the secrets they create
+# (recordSecret in e2e/tests/fixtures.ts); the admin password and the publisher's secret come from the dev fixtures. The
+# setup token is left out: the sidecar prints it on purpose, and it is dead once setup is done.
+check_logged_secrets() {
+  local n=0 bad=0 s hits
+  while IFS= read -r s; do
+    [[ -n $s ]] || continue
+    n=$((n + 1))
+    hits=$(cat "$CACHE"/e2e-logs/*.log | grep -cF -- "$s" || true)
+    if ((hits > 0)); then
+      echo "BAD secret #$n appears $hits times in .cache/e2e-logs" >&2
+      bad=1
+    fi
+  done < <(dev_env DEV_ADMIN_PASSWORD; echo; dev_env DEV_PUBLISHER_SECRET; echo; cat "$E2E_CONTROL_DIR/secrets" 2>/dev/null || true)
+  # A full run creates credentials; a run of chosen specs may not.
+  ((n >= 3 || ${1:-0} > 0)) || die "only $n secrets to look for: did the tests record theirs?"
+  ((bad == 0)) || die "a secret appears in the logs"
+  echo "ok  none of $n secrets appears in the logs"
+}
+
+# pebble_ca copies the CA of Pebble's own HTTPS out of its image, for the e2e ACME sidecar and the tests to trust.
+pebble_ca() {
+  local dir=$CACHE/pebble cid
+  [[ -s $dir/pebble.minica.pem ]] && return
+  mkdir -p "$dir"
+  cid=$(docker create "$PEBBLE_IMAGE")
+  docker cp "$cid:/test/certs/pebble.minica.pem" "$dir/pebble.minica.pem" >/dev/null
+  docker rm "$cid" >/dev/null
+}
+
+cmd_e2e() {
+  local token
+  if [[ ${1:-} == --slow ]]; then # also the tests tagged @slow (waiting out MediaMTX's own timeouts)
+    export E2E_SLOW=1
+    shift
+  fi
+  trap e2e_teardown EXIT
+  step "e2e: stack $E2E_PROJECT (uid 10002, read-only, named volumes, nothing published)"
+  pebble_ca
+  e2e_compose up -d --build --wait --remove-orphans mediamtx sidecar publisher portgate pebble sidecar-acme
+  scripts/compose-assert.sh "$E2E_PROJECT" ports-none
+  scripts/compose-assert.sh "$E2E_PROJECT" hardening
+  bootstrap_publisher "$E2E_PROJECT"
+  token=$(setup_token "$E2E_PROJECT")
+  [[ -n $token ]] || die "the sidecar printed no setup token"
+  step "e2e: playwright"
+  export SETUP_TOKEN=$token
+  rm -rf "$E2E_CONTROL_DIR" && mkdir -p "$E2E_CONTROL_DIR"
+  e2e_control &
+  E2E_CONTROL_PID=$!
+  local rc=0
+  E2E_ARGS="$*" e2e_compose --profile e2e run --rm playwright || rc=$?
+  # Keep the stack's logs for debugging and for the check that no secret appears in a logged URL.
+  mkdir -p "$CACHE/e2e-logs"
+  for s in sidecar mediamtx sidecar-acme; do docker logs "$E2E_PROJECT-$s-1" >"$CACHE/e2e-logs/$s.log" 2>&1 || true; done
+  ((rc == 0)) || die "playwright failed (logs in .cache/e2e-logs)"
+  step "e2e: no secret in the logs"
+  check_logged_secrets $#
+  step "e2e: state files"
+  check_state_files
+}
+
+cmd_screenshots() {
+  mkdir -p docs/screenshots
+  SCREENSHOTS=1 cmd_e2e tests/screenshots.spec.ts
+}
+
+cmd_bump_mediamtx() {
+  local v=${1:-} url sha img pub
+  [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "usage: ./dev bump-mediamtx <version>, e.g. 1.21.2"
+  url="https://raw.githubusercontent.com/bluenviron/mediamtx/v$v/api/openapi.yaml"
+  step "bump: vendor the v$v OpenAPI spec"
+  # shellcheck disable=SC2016 # JavaScript, not shell expansions
+  NET=bridge run "$NODE_IMAGE" . -- node --input-type=module -e '
+    const res = await fetch(process.argv[1]);
+    if (!res.ok) throw new Error(`HTTP ${res.status} for ${process.argv[1]}`);
+    (await import("node:fs")).writeFileSync(process.argv[2], Buffer.from(await res.arrayBuffer()));
+  ' "$url" /src/spec/mediamtx/openapi.yaml
+  sha=$(sha256 spec/mediamtx/openapi.yaml)
+  # shellcheck disable=SC2016 # the backticks are literal Markdown-style quotes
+  printf '# Written by `./dev bump-mediamtx`. The vendored spec must match upstream at this version byte for byte.\nversion=%s\nurl=%s\nsha256=%s\n' \
+    "$v" "$url" "$sha" >spec/mediamtx/openapi.lock
+  step "bump: resolve image digests"
+  img="bluenviron/mediamtx:$v@$(digest "bluenviron/mediamtx:$v")"
+  pub="bluenviron/mediamtx:$v-ffmpeg@$(digest "bluenviron/mediamtx:$v-ffmpeg")"
+  set_line deploy/tools.env MEDIAMTX_VERSION "$v"
+  set_line deploy/tools.env MEDIAMTX_IMAGE "$img"
+  set_line deploy/tools.env TEST_PUBLISHER_IMAGE "$pub"
+  sed -i.bak "s|^    image: bluenviron/mediamtx:.*|    image: $img|" compose.yaml && rm -f compose.yaml.bak
+  set_line Dockerfile "ARG MEDIAMTX_VERSION" "$v"
+  set_line Dockerfile "ARG MEDIAMTX_IMAGE" "$img"
+  # shellcheck source=deploy/tools.env
+  . deploy/tools.env
+  cmd_gen
+  pins_check
+  cat <<'EOF'
+
+Next: ./dev test fails until sidecar/internal/mtxapi/operations.yaml covers every operation of the new spec.
+Then run ./dev ci and ./dev e2e, and read MediaMTX's release notes for changed behaviour (CONTRIBUTING.md).
+EOF
+}
+digest() {
+  local d
+  d=$(docker buildx imagetools inspect "$1" --format '{{json .Manifest.Digest}}' | tr -d '"')
+  [[ $d == sha256:* ]] || die "cannot resolve the digest of $1"
+  echo "$d"
+}
+set_line() { # file, key (up to the =), value
+  sed -i.bak "s|^$2=.*|$2=$3|" "$1" && rm -f "$1.bak"
+  grep -q "^$2=$3\$" "$1" || die "could not set $2 in $1"
+}
+
+
+# The offline screen's clips, embedded in the sidecar, which installs them into the holding directory at startup.
+cmd_offline_clips() {
+  step "offline-clips"
+  run "$TEST_PUBLISHER_IMAGE" sidecar/internal/app/offline --entrypoint sh -- ./make.sh
+}
+
+cmd_clean() {
+  dev_compose "$DEV_PROJECT" --profile vite down --volumes --remove-orphans >/dev/null 2>&1 || true
+  [[ -d .cache ]] && chmod -R u+w .cache # module caches written before -modcacherw are read-only
+  rm -rf .cache web/node_modules web/dist e2e/node_modules e2e/test-results e2e/playwright-report deploy/.dev
+  echo "clean"
+}
+
+cmd=${1:-help}
+[[ $# -gt 0 ]] && shift
+case $cmd in
+  ci) cmd_ci ;;
+  lint) cmd_lint ;;
+  fmt) cmd_fmt ;;
+  test) cmd_test "$@" ;;
+  gen) cmd_gen ;;
+  gen-check) cmd_gen_check ;;
+  spec-verify) cmd_spec_verify ;;
+  build) cmd_build ;;
+  up) cmd_up "$@" ;;
+  check) cmd_check ;;
+  logs) cmd_logs "$@" ;;
+  down) cmd_down ;;
+  e2e) cmd_e2e "$@" ;;
+  deps) cmd_deps ;;
+  bump-mediamtx) cmd_bump_mediamtx "$@" ;;
+  screenshots) cmd_screenshots ;;
+  offline-clips) cmd_offline_clips ;;
+  clean) cmd_clean ;;
+  help | -h | --help) usage ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

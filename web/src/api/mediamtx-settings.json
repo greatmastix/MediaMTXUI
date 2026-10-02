@@ -1,0 +1,1582 @@
+{
+  "version": "1.21.1",
+  "global": [
+    {
+      "key": "logLevel",
+      "section": "General",
+      "type": "string",
+      "default": "info",
+      "description": "Verbosity of the program; available values are \"error\", \"warn\", \"info\", \"debug\"."
+    },
+    {
+      "key": "logDestinations",
+      "section": "General",
+      "type": "array",
+      "items": "string",
+      "default": [
+        "stdout"
+      ],
+      "description": "Destinations of log messages; available values are \"stdout\", \"file\" and \"syslog\"."
+    },
+    {
+      "key": "logStructured",
+      "section": "General",
+      "type": "boolean",
+      "default": false,
+      "description": "When destination is \"stdout\" or \"file\", emit logs in structured format (JSONL)."
+    },
+    {
+      "key": "logFile",
+      "section": "General",
+      "type": "string",
+      "default": "mediamtx.log",
+      "description": "When \"file\" is in logDestinations, this is the file which will receive logs."
+    },
+    {
+      "key": "sysLogPrefix",
+      "section": "General",
+      "type": "string",
+      "default": "mediamtx",
+      "description": "When \"syslog\" is in logDestinations, use prefix for logs."
+    },
+    {
+      "key": "dumpPackets",
+      "section": "General",
+      "type": "boolean",
+      "default": false,
+      "description": "Dump packets to disk. This is useful for debugging."
+    },
+    {
+      "key": "readTimeout",
+      "section": "General",
+      "type": "string",
+      "default": "10s",
+      "description": "Timeout of read operations."
+    },
+    {
+      "key": "writeTimeout",
+      "section": "General",
+      "type": "string",
+      "default": "10s",
+      "description": "Timeout of write operations."
+    },
+    {
+      "key": "writeQueueSize",
+      "section": "General",
+      "type": "integer",
+      "default": 512,
+      "description": "Size of the queue of outgoing packets.\nA higher value allows to increase throughput, a lower value allows to save RAM."
+    },
+    {
+      "key": "udpMaxPayloadSize",
+      "section": "General",
+      "type": "integer",
+      "default": 1452,
+      "description": "Maximum size of outgoing UDP payloads.\nIt defaults to the maximum packet size on ethernet (1500) minus IPv6 and UDP headers (48).\nThis can be decreased to avoid fragmentation on networks with a low MTU."
+    },
+    {
+      "key": "udpReadBufferSize",
+      "section": "General",
+      "type": "integer",
+      "default": 0,
+      "description": "Size of the read buffer of every UDP socket.\nThis can be increased to decrease packet losses.\nIt defaults to the default value of the operating system."
+    },
+    {
+      "key": "runOnConnect",
+      "section": "General",
+      "type": "string",
+      "default": null,
+      "description": "Command to run when a client connects to the server.\nThis is terminated with SIGINT when a client disconnects from the server.\nThe following environment variables are available:\n* MTX_CONN_TYPE: connection type\n* MTX_CONN_ID: connection ID\n* RTSP_PORT: RTSP server port"
+    },
+    {
+      "key": "runOnConnectRestart",
+      "section": "General",
+      "type": "boolean",
+      "default": false,
+      "description": "Restart the command if it exits."
+    },
+    {
+      "key": "runOnDisconnect",
+      "section": "General",
+      "type": "string",
+      "default": null,
+      "description": "Command to run when a client disconnects from the server.\nEnvironment variables are the same as runOnConnect."
+    },
+    {
+      "key": "authMethod",
+      "section": "Authentication",
+      "type": "string",
+      "default": "internal",
+      "description": "Authentication method. Available values:\n* Internal database: credentials are stored in the configuration file\n* External HTTP server: an external HTTP URL is contacted for each authentication request\n* External JWT provider: credentials are signed tokens released by an external identity server"
+    },
+    {
+      "key": "authInternalUsers",
+      "section": "Authentication",
+      "type": "array",
+      "items": "object",
+      "default": [
+        {
+          "ips": [],
+          "pass": null,
+          "permissions": [
+            {
+              "action": "publish",
+              "path": null
+            },
+            {
+              "action": "read",
+              "path": null
+            },
+            {
+              "action": "playback",
+              "path": null
+            }
+          ],
+          "user": "any"
+        },
+        {
+          "ips": [
+            "127.0.0.1",
+            "::1"
+          ],
+          "pass": null,
+          "permissions": [
+            {
+              "action": "api"
+            },
+            {
+              "action": "metrics"
+            },
+            {
+              "action": "pprof"
+            }
+          ],
+          "user": "any"
+        }
+      ],
+      "description": "Internal authentication.\nEnabled users."
+    },
+    {
+      "key": "authHTTPAddress",
+      "section": "Authentication",
+      "type": "string",
+      "default": null,
+      "description": "HTTP-based authentication.\nURL called to perform authentication. Every time a user wants\nto perform an action, the server calls this URL with the POST method\nand a payload described in the documentation.\nIf the response code is 20x, the action is allowed, otherwise\nit is forbidden."
+    },
+    {
+      "key": "authHTTPFingerprint",
+      "section": "Authentication",
+      "type": "string",
+      "default": null,
+      "description": "If the HTTP authentication URL has a self-signed or invalid certificate,\nyou can provide the fingerprint of the certificate in order to\nvalidate it anyway. It can be obtained by running:\nopenssl s_client -connect auth_http_domain:443 \u003c/dev/null 2\u003e/dev/null | sed -n '/BEGIN/,/END/p' \u003e server.crt\nopenssl x509 -in server.crt -noout -fingerprint -sha256 | cut -d \"=\" -f2 | tr -d ':'"
+    },
+    {
+      "key": "authHTTPExclude",
+      "section": "Authentication",
+      "type": "array",
+      "items": "object",
+      "default": [],
+      "description": "Actions to exclude from HTTP-based authentication.\nFormat is the same as the one of user permissions."
+    },
+    {
+      "key": "authJWTJWKS",
+      "section": "Authentication",
+      "type": "string",
+      "default": null,
+      "description": "JWT-based authentication.\nUsers have to log in through an external identity server and obtain a JWT.\nThis JWT must contain the claim \"mediamtx_permissions\" with permissions,\nfor instance:\n{\n\"mediamtx_permissions\": [\n{\n\"action\": \"publish\",\n\"path\": \"somepath\"\n}\n]\n}\nUsers are expected to pass the JWT in the Authorization header or as password.\nThis is the JWKS URL that will be used to pull (once) the public key that allows\nto validate JWTs."
+    },
+    {
+      "key": "authJWTJWKSFingerprint",
+      "section": "Authentication",
+      "type": "string",
+      "default": null,
+      "description": "If the JWKS URL has a self-signed or invalid certificate,\nyou can provide the fingerprint of the certificate in order to\nvalidate it anyway. It can be obtained by running:\nopenssl s_client -connect jwt_jwks_domain:443 \u003c/dev/null 2\u003e/dev/null | sed -n '/BEGIN/,/END/p' \u003e server.crt\nopenssl x509 -in server.crt -noout -fingerprint -sha256 | cut -d \"=\" -f2 | tr -d ':'"
+    },
+    {
+      "key": "authJWTClaimKey",
+      "section": "Authentication",
+      "type": "string",
+      "default": "mediamtx_permissions",
+      "description": "name of the claim that contains permissions."
+    },
+    {
+      "key": "authJWTExclude",
+      "section": "Authentication",
+      "type": "array",
+      "items": "object",
+      "default": [],
+      "description": "Actions to exclude from JWT-based authentication.\nFormat is the same as the one of user permissions."
+    },
+    {
+      "key": "authJWTIssuer",
+      "section": "Authentication",
+      "type": "string",
+      "default": null,
+      "description": "Expected issuer (iss) claim in the JWT. Leave empty to skip validation."
+    },
+    {
+      "key": "authJWTAudience",
+      "section": "Authentication",
+      "type": "string",
+      "default": null,
+      "description": "Expected audience (aud) claim in the JWT. Leave empty to skip validation."
+    },
+    {
+      "key": "api",
+      "section": "Control API",
+      "type": "boolean",
+      "default": false,
+      "description": "Enable the control API server, which allows to control the server."
+    },
+    {
+      "key": "apiAddress",
+      "section": "Control API",
+      "type": "string",
+      "default": ":9997",
+      "description": "Address of the TCP/HTTP listener."
+    },
+    {
+      "key": "apiEncryption",
+      "section": "Control API",
+      "type": "boolean",
+      "default": false,
+      "description": "Enable HTTPS."
+    },
+    {
+      "key": "apiServerKey",
+      "section": "Control API",
+      "type": "string",
+      "default": "server.key",
+      "description": "Path to the server key. This is needed only when encryption is yes.\nThis can be generated with:\nopenssl genrsa -out server.key 2048\nopenssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650"
+    },
+    {
+      "key": "apiServerCert",
+      "section": "Control API",
+      "type": "string",
+      "default": "server.crt",
+      "description": "Path to the server certificate."
+    },
+    {
+      "key": "apiAllowOrigins",
+      "section": "Control API",
+      "type": "array",
+      "items": "string",
+      "default": [],
+      "description": "Allowed CORS origins.\nSupports wildcards: ['http://*.example.com']"
+    },
+    {
+      "key": "apiTrustedProxies",
+      "section": "Control API",
+      "type": "array",
+      "items": "string",
+      "default": [],
+      "description": "IPs or CIDRs of proxies placed before the HTTP server.\nThese proxies can use the X-Forwarded-For header to set the real IP of clients,\nand the X-Forwarded-Proto header to set the original protocol."
+    },
+    {
+      "key": "metrics",
+      "section": "Metrics server",
+      "type": "boolean",
+      "default": false,
+      "description": "Enable the metrics server, which allows to extract Prometheus-compatible metrics."
+    },
+    {
+      "key": "metricsAddress",
+      "section": "Metrics server",
+      "type": "string",
+      "default": ":9998",
+      "description": "Address of the TCP/HTTP listener."
+    },
+    {
+      "key": "metricsEncryption",
+      "section": "Metrics server",
+      "type": "boolean",
+      "default": false,
+      "description": "Enable HTTPS."
+    },
+    {
+      "key": "metricsServerKey",
+      "section": "Metrics server",
+      "type": "string",
+      "default": "server.key",
+      "description": "Path to the server key. This is needed only when encryption is yes.\nThis can be generated with:\nopenssl genrsa -out server.key 2048\nopenssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650"
+    },
+    {
+      "key": "metricsServerCert",
+      "section": "Metrics server",
+      "type": "string",
+      "default": "server.crt",
+      "description": "Path to the server certificate."
+    },
+    {
+      "key": "metricsAllowOrigins",
+      "section": "Metrics server",
+      "type": "array",
+      "items": "string",
+      "default": [],
+      "description": "Allowed CORS origins.\nSupports wildcards: ['http://*.example.com']"
+    },
+    {
+      "key": "metricsTrustedProxies",
+      "section": "Metrics server",
+      "type": "array",
+      "items": "string",
+      "default": [],
+      "description": "IPs or CIDRs of proxies placed before the HTTP server.\nThese proxies can use the X-Forwarded-For header to set the real IP of clients,\nand the X-Forwarded-Proto header to set the original protocol."
+    },
+    {
+      "key": "pprof",
+      "section": "PPROF server",
+      "type": "boolean",
+      "default": false,
+      "description": "Enable the PPROF server, which allows to extract performance reports."
+    },
+    {
+      "key": "pprofAddress",
+      "section": "PPROF server",
+      "type": "string",
+      "default": ":9999",
+      "description": "Address of the TCP/HTTP listener."
+    },
+    {
+      "key": "pprofEncryption",
+      "section": "PPROF server",
+      "type": "boolean",
+      "default": false,
+      "description": "Enable HTTPS."
+    },
+    {
+      "key": "pprofServerKey",
+      "section": "PPROF server",
+      "type": "string",
+      "default": "server.key",
+      "description": "Path to the server key. This is needed only when encryption is yes.\nThis can be generated with:\nopenssl genrsa -out server.key 2048\nopenssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650"
+    },
+    {
+      "key": "pprofServerCert",
+      "section": "PPROF server",
+      "type": "string",
+      "default": "server.crt",
+      "description": "Path to the server certificate."
+    },
+    {
+      "key": "pprofAllowOrigins",
+      "section": "PPROF server",
+      "type": "array",
+      "items": "string",
+      "default": [],
+      "description": "Allowed CORS origins.\nSupports wildcards: ['http://*.example.com']"
+    },
+    {
+      "key": "pprofTrustedProxies",
+      "section": "PPROF server",
+      "type": "array",
+      "items": "string",
+      "default": [],
+      "description": "IPs or CIDRs of proxies placed before the HTTP server.\nThese proxies can use the X-Forwarded-For header to set the real IP of clients,\nand the X-Forwarded-Proto header to set the original protocol."
+    },
+    {
+      "key": "playback",
+      "section": "Playback server",
+      "type": "boolean",
+      "default": false,
+      "description": "Enable the playback server, which allows to download recordings from the server."
+    },
+    {
+      "key": "playbackAddress",
+      "section": "Playback server",
+      "type": "string",
+      "default": ":9996",
+      "description": "Address of the TCP/HTTP listener."
+    },
+    {
+      "key": "playbackEncryption",
+      "section": "Playback server",
+      "type": "boolean",
+      "default": false,
+      "description": "Enable HTTPS."
+    },
+    {
+      "key": "playbackServerKey",
+      "section": "Playback server",
+      "type": "string",
+      "default": "server.key",
+      "description": "Path to the server key. This is needed only when encryption is yes.\nThis can be generated with:\nopenssl genrsa -out server.key 2048\nopenssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650"
+    },
+    {
+      "key": "playbackServerCert",
+      "section": "Playback server",
+      "type": "string",
+      "default": "server.crt",
+      "description": "Path to the server certificate."
+    },
+    {
+      "key": "playbackAllowOrigins",
+      "section": "Playback server",
+      "type": "array",
+      "items": "string",
+      "default": [
+        "*"
+      ],
+      "description": "Allowed CORS origins.\nSupports wildcards: ['http://*.example.com']"
+    },
+    {
+      "key": "playbackTrustedProxies",
+      "section": "Playback server",
+      "type": "array",
+      "items": "string",
+      "default": [],
+      "description": "IPs or CIDRs of proxies placed before the HTTP server.\nThese proxies can use the X-Forwarded-For header to set the real IP of clients,\nand the X-Forwarded-Proto header to set the original protocol."
+    },
+    {
+      "key": "rtsp",
+      "section": "RTSP server",
+      "type": "boolean",
+      "default": true,
+      "description": "Enable the RTSP server, which allows to publish and read streams with the RTSP protocol."
+    },
+    {
+      "key": "rtspTransports",
+      "section": "RTSP server",
+      "type": "array",
+      "items": "string",
+      "default": [
+        "udp",
+        "multicast",
+        "tcp"
+      ],
+      "description": "Enabled RTSP transport protocols. The handshake is always performed with TCP."
+    },
+    {
+      "key": "rtspEncryption",
+      "section": "RTSP server",
+      "type": "string",
+      "default": "no",
+      "description": "Use secure protocol variants (RTSPS, SRTP, SRTCP).\nAvailable values are \"no\", \"strict\", \"optional\"."
+    },
+    {
+      "key": "rtspAddress",
+      "section": "RTSP server",
+      "type": "string",
+      "default": ":8554",
+      "description": "Address of the TCP/RTSP listener. This is needed only when encryption is \"no\" or \"optional\"."
+    },
+    {
+      "key": "rtspsAddress",
+      "section": "RTSP server",
+      "type": "string",
+      "default": ":8322",
+      "description": "Address of the TCP/RTSPS listener. This is needed only when encryption is \"strict\" or \"optional\"."
+    },
+    {
+      "key": "rtpAddress",
+      "section": "RTSP server",
+      "type": "string",
+      "default": ":8000",
+      "description": "Address of the UDP/RTP listener. This is needed only when \"udp\" is in rtspTransports and encryption is \"no\" or \"optional\"."
+    },
+    {
+      "key": "rtcpAddress",
+      "section": "RTSP server",
+      "type": "string",
+      "default": ":8001",
+      "description": "Address of the UDP/RTCP listener. This is needed only when \"udp\" is in rtspTransports and encryption is \"no\" or \"optional\"."
+    },
+    {
+      "key": "multicastIPRange",
+      "section": "RTSP server",
+      "type": "string",
+      "default": "224.1.0.0/16",
+      "description": "IP range of all UDP-multicast listeners. This is needed only when \"multicast\" is in rtspTransports and encryption is \"no\" or \"optional\"."
+    },
+    {
+      "key": "multicastRTPPort",
+      "section": "RTSP server",
+      "type": "integer",
+      "default": 8002,
+      "description": "Port of all UDP-multicast/RTP listeners. This is needed only when \"multicast\" is in rtspTransports and encryption is \"no\" or \"optional\"."
+    },
+    {
+      "key": "multicastRTCPPort",
+      "section": "RTSP server",
+      "type": "integer",
+      "default": 8003,
+      "description": "Port of all UDP-multicast/RTCP listeners. This is needed only when \"multicast\" is in rtspTransports and encryption is \"no\" or \"optional\"."
+    },
+    {
+      "key": "srtpAddress",
+      "section": "RTSP server",
+      "type": "string",
+      "default": ":8004",
+      "description": "Address of the UDP/SRTP listener. This is needed only when \"udp\" is in rtspTransports and encryption is \"strict\" or \"optional\"."
+    },
+    {
+      "key": "srtcpAddress",
+      "section": "RTSP server",
+      "type": "string",
+      "default": ":8005",
+      "description": "Address of the UDP/SRTCP listener. This is needed only when \"udp\" is in rtspTransports and encryption is \"strict\" or \"optional\"."
+    },
+    {
+      "key": "multicastSRTPPort",
+      "section": "RTSP server",
+      "type": "integer",
+      "default": 8006,
+      "description": "Port of all UDP-multicast/SRTP listeners. This is needed only when \"multicast\" is in rtspTransports and encryption is \"strict\" or \"optional\"."
+    },
+    {
+      "key": "multicastSRTCPPort",
+      "section": "RTSP server",
+      "type": "integer",
+      "default": 8007,
+      "description": "Port of all UDP-multicast/SRTCP listeners. This is needed only when \"multicast\" is in rtspTransports and encryption is \"strict\" or \"optional\"."
+    },
+    {
+      "key": "rtspServerKey",
+      "section": "RTSP server",
+      "type": "string",
+      "default": "server.key",
+      "description": "Path to the server key. This is needed only when encryption is \"strict\" or \"optional\".\nThis can be generated with:\nopenssl genrsa -out server.key 2048\nopenssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650"
+    },
+    {
+      "key": "rtspServerCert",
+      "section": "RTSP server",
+      "type": "string",
+      "default": "server.crt",
+      "description": "Path to the server certificate. This is needed only when encryption is \"strict\" or \"optional\"."
+    },
+    {
+      "key": "rtspAuthMethods",
+      "section": "RTSP server",
+      "type": "array",
+      "items": "string",
+      "default": [
+        "basic"
+      ],
+      "description": "Authentication methods. Available are \"basic\" and \"digest\".\n\"digest\" doesn't provide any additional security and is available for compatibility only."
+    },
+    {
+      "key": "rtspTrustedProxies",
+      "section": "RTSP server",
+      "type": "array",
+      "items": "string",
+      "default": [],
+      "description": "IPs or CIDRs of proxies placed before the RTSP server.\nIf the server receives a request from one of these entries, IP in logs\nand authentication will be taken from the PROXY protocol header."
+    },
+    {
+      "key": "rtmp",
+      "section": "RTMP server",
+      "type": "boolean",
+      "default": true,
+      "description": "Enable the RTMP server, which allows to publish and read streams with the RTMP protocol."
+    },
+    {
+      "key": "rtmpEncryption",
+      "section": "RTMP server",
+      "type": "string",
+      "default": "no",
+      "description": "Use the secure protocol variant (RTMPS).\nAvailable values are \"no\", \"strict\", \"optional\"."
+    },
+    {
+      "key": "rtmpAddress",
+      "section": "RTMP server",
+      "type": "string",
+      "default": ":1935",
+      "description": "Address of the TCP/RTMP listener. This is needed only when encryption is \"no\" or \"optional\"."
+    },
+    {
+      "key": "rtmpsAddress",
+      "section": "RTMP server",
+      "type": "string",
+      "default": ":1936",
+      "description": "Address of the TCP/RTMPS listener. This is needed only when encryption is \"strict\" or \"optional\"."
+    },
+    {
+      "key": "rtmpServerKey",
+      "section": "RTMP server",
+      "type": "string",
+      "default": "server.key",
+      "description": "Path to the server key. This is needed only when encryption is \"strict\" or \"optional\".\nThis can be generated with:\nopenssl genrsa -out server.key 2048\nopenssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650"
+    },
+    {
+      "key": "rtmpServerCert",
+      "section": "RTMP server",
+      "type": "string",
+      "default": "server.crt",
+      "description": "Path to the server certificate. This is needed only when encryption is \"strict\" or \"optional\"."
+    },
+    {
+      "key": "rtmpTrustedProxies",
+      "section": "RTMP server",
+      "type": "array",
+      "items": "string",
+      "default": [],
+      "description": "IPs or CIDRs of proxies placed before the RTMP server.\nIf the server receives a request from one of these entries, IP in logs\nand authentication will be taken from the PROXY protocol header."
+    },
+    {
+      "key": "hls",
+      "section": "HLS server",
+      "type": "boolean",
+      "default": true,
+      "description": "Enable the HLS server, which allows to read streams with the HLS protocol."
+    },
+    {
+      "key": "hlsAddress",
+      "section": "HLS server",
+      "type": "string",
+      "default": ":8888",
+      "description": "Address of the TCP/HTTP listener."
+    },
+    {
+      "key": "hlsEncryption",
+      "section": "HLS server",
+      "type": "boolean",
+      "default": false,
+      "description": "Enable HTTPS.\nThis is required for Low-Latency HLS to function correctly on Apple devices."
+    },
+    {
+      "key": "hlsServerKey",
+      "section": "HLS server",
+      "type": "string",
+      "default": "server.key",
+      "description": "Path to the server key. This is needed only when encryption is yes.\nThis can be generated with:\nopenssl genrsa -out server.key 2048\nopenssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650"
+    },
+    {
+      "key": "hlsServerCert",
+      "section": "HLS server",
+      "type": "string",
+      "default": "server.crt",
+      "description": "Path to the server certificate."
+    },
+    {
+      "key": "hlsAllowOrigins",
+      "section": "HLS server",
+      "type": "array",
+      "items": "string",
+      "default": [
+        "*"
+      ],
+      "description": "Allowed CORS origins.\nSupports wildcards: ['http://*.example.com']"
+    },
+    {
+      "key": "hlsTrustedProxies",
+      "section": "HLS server",
+      "type": "array",
+      "items": "string",
+      "default": [],
+      "description": "IPs or CIDRs of proxies placed before the HLS server.\nIf the server receives a request from one of these entries, IP in logs\nwill be taken from the X-Forwarded-For header."
+    },
+    {
+      "key": "hlsAlwaysRemux",
+      "section": "HLS server",
+      "type": "boolean",
+      "default": false,
+      "description": "By default, HLS is generated only when requested by a user.\nThis option allows to generate it always, avoiding the delay between request and generation."
+    },
+    {
+      "key": "hlsVariant",
+      "section": "HLS server",
+      "type": "string",
+      "default": "lowLatency",
+      "description": "Variant of the HLS protocol to use. Available options are:\n* mpegts - uses MPEG-TS segments, for maximum compatibility.\n* fmp4 - uses fragmented MP4 segments, more efficient.\n* lowLatency - uses Low-Latency HLS."
+    },
+    {
+      "key": "hlsSegmentCount",
+      "section": "HLS server",
+      "type": "integer",
+      "default": 7,
+      "description": "Number of HLS segments to keep on the server.\nSegments allow to seek through the stream.\nTheir number doesn't influence latency."
+    },
+    {
+      "key": "hlsSegmentDuration",
+      "section": "HLS server",
+      "type": "string",
+      "default": "1s",
+      "description": "Minimum duration of each segment.\nA player usually puts 3 segments in a buffer before reproducing the stream.\nThe final segment duration is also influenced by the interval between IDR frames,\nsince the server changes the duration in order to include at least one IDR frame\nin each segment."
+    },
+    {
+      "key": "hlsPartDuration",
+      "section": "HLS server",
+      "type": "string",
+      "default": "200ms",
+      "description": "Minimum duration of each part.\nA player usually puts 3 parts in a buffer before reproducing the stream.\nParts are used in Low-Latency HLS in place of segments.\nPart duration is influenced by the distance between video/audio samples\nand is adjusted in order to produce segments with a similar duration."
+    },
+    {
+      "key": "hlsSegmentMaxSize",
+      "section": "HLS server",
+      "type": "string",
+      "default": "50M",
+      "description": "Maximum size of each segment.\nThis prevents RAM exhaustion."
+    },
+    {
+      "key": "hlsDirectory",
+      "section": "HLS server",
+      "type": "string",
+      "default": "",
+      "description": "Directory in which to save segments and non-low-latency playlists.\nThis has two purposes: offloading RAM and creating a self-consistent directory\nthat can be served by a CDN."
+    },
+    {
+      "key": "hlsMuxerCloseAfter",
+      "section": "HLS server",
+      "type": "string",
+      "default": "60s",
+      "description": "The muxer will be closed when there are no\nreader requests and this amount of time has passed."
+    },
+    {
+      "key": "hlsCDNSecret",
+      "section": "HLS server",
+      "type": "string",
+      "default": "",
+      "description": "Secret to identify requests coming from a CDN.\nThe CDN must insert this secret in every request in the\n'Authorization: Bearer' header."
+    },
+    {
+      "key": "webrtc",
+      "section": "WebRTC server",
+      "type": "boolean",
+      "default": true,
+      "description": "Enable the WebRTC server, which allows to publish and read streams with the WebRTC protocol."
+    },
+    {
+      "key": "webrtcAddress",
+      "section": "WebRTC server",
+      "type": "string",
+      "default": ":8889",
+      "description": "Address of the WebRTC TCP/HTTP listener."
+    },
+    {
+      "key": "webrtcEncryption",
+      "section": "WebRTC server",
+      "type": "boolean",
+      "default": false,
+      "description": "Enable HTTPS.\nThis covers only the WebRTC handshake, while WebRTC streams\nare always encrypted with a key that is exchanged during the WebRTC handshake."
+    },
+    {
+      "key": "webrtcServerKey",
+      "section": "WebRTC server",
+      "type": "string",
+      "default": "server.key",
+      "description": "Path to the server key.\nThis can be generated with:\nopenssl genrsa -out server.key 2048\nopenssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650"
+    },
+    {
+      "key": "webrtcServerCert",
+      "section": "WebRTC server",
+      "type": "string",
+      "default": "server.crt",
+      "description": "Path to the server certificate."
+    },
+    {
+      "key": "webrtcAllowOrigins",
+      "section": "WebRTC server",
+      "type": "array",
+      "items": "string",
+      "default": [
+        "*"
+      ],
+      "description": "Allowed CORS origins.\nSupports wildcards: ['http://*.example.com']"
+    },
+    {
+      "key": "webrtcTrustedProxies",
+      "section": "WebRTC server",
+      "type": "array",
+      "items": "string",
+      "default": [],
+      "description": "IPs or CIDRs of proxies placed before the WebRTC server.\nIf the server receives a request from one of these entries, IP in logs\nwill be taken from the X-Forwarded-For header."
+    },
+    {
+      "key": "webrtcLocalUDPAddress",
+      "section": "WebRTC server",
+      "type": "string",
+      "default": ":8189",
+      "description": "Address of a UDP/ICE listener that will receive connections.\nUse a blank string to disable."
+    },
+    {
+      "key": "webrtcLocalTCPAddress",
+      "section": "WebRTC server",
+      "type": "string",
+      "default": "",
+      "description": "Address of a TCP/ICE listener that will receive connections.\nThis is disabled by default since TCP is less efficient than UDP and\nintroduces a progressive delay when network is congested."
+    },
+    {
+      "key": "webrtcIPsFromInterfaces",
+      "section": "WebRTC server",
+      "type": "boolean",
+      "default": true,
+      "description": "WebRTC clients need to know the IP of the server.\nGather IPs from interfaces and send them to clients."
+    },
+    {
+      "key": "webrtcIPsFromInterfacesList",
+      "section": "WebRTC server",
+      "type": "array",
+      "items": "string",
+      "default": [],
+      "description": "Interfaces whose IPs will be sent to clients.\nAn empty value means to use all available interfaces."
+    },
+    {
+      "key": "webrtcIPsFromInterfacesExcludeList",
+      "section": "WebRTC server",
+      "type": "array",
+      "items": "string",
+      "default": [],
+      "description": "Interfaces whose IPs will NOT be sent to clients.\nThis is useful to exclude specific interfaces (e.g. VPN tunnels) while using all others."
+    },
+    {
+      "key": "webrtcAdditionalHosts",
+      "section": "WebRTC server",
+      "type": "array",
+      "items": "string",
+      "default": [],
+      "description": "Additional hosts or IPs to send to clients."
+    },
+    {
+      "key": "webrtcICEServers2",
+      "section": "WebRTC server",
+      "type": "array",
+      "items": "object",
+      "default": [],
+      "description": "ICE servers. Needed only when local listeners can't be reached by clients.\nSTUN servers allow to obtain and share the public IP of the server.\nTURN/TURNS servers force all traffic through them."
+    },
+    {
+      "key": "webrtcSTUNGatherTimeout",
+      "section": "WebRTC server",
+      "type": "string",
+      "default": "5s",
+      "description": "- url: stun:stun.l.google.com:19302\nif user is \"AUTH_SECRET\", then authentication is secret based.\nthe secret must be inserted into the password field.\nusername: ''\npassword: ''\nclientOnly: false\nMaximum time to gather STUN candidates."
+    },
+    {
+      "key": "webrtcHandshakeTimeout",
+      "section": "WebRTC server",
+      "type": "string",
+      "default": "10s",
+      "description": "Time to wait for the WebRTC handshake to complete."
+    },
+    {
+      "key": "webrtcTrackGatherTimeout",
+      "section": "WebRTC server",
+      "type": "string",
+      "default": "2s",
+      "description": "Maximum time to gather tracks."
+    },
+    {
+      "key": "srt",
+      "section": "SRT server",
+      "type": "boolean",
+      "default": true,
+      "description": "Enable the SRT server, which allows to publish and read streams with the SRT protocol."
+    },
+    {
+      "key": "srtAddress",
+      "section": "SRT server",
+      "type": "string",
+      "default": ":8890",
+      "description": "Address of the UDP/SRT listener."
+    },
+    {
+      "key": "moq",
+      "section": "MoQ server",
+      "type": "boolean",
+      "default": true,
+      "description": "Enable the MoQ (Media over QUIC) server, which allows to publish and read streams with the MoQ protocol."
+    },
+    {
+      "key": "moqHTTP2Address",
+      "section": "MoQ server",
+      "type": "string",
+      "default": ":8892",
+      "description": "Address of the TCP/HTTP2 listener.\nThis hosts the web client."
+    },
+    {
+      "key": "moqHTTP3Address",
+      "section": "MoQ server",
+      "type": "string",
+      "default": ":8892",
+      "description": "Address of the UDP/HTTP3 listener.\nThis hosts the WebTransport endpoint."
+    },
+    {
+      "key": "moqQUICAddress",
+      "section": "MoQ server",
+      "type": "string",
+      "default": ":8893",
+      "description": "Address of the UDP/QUIC listener used for native MoQ-over-QUIC."
+    },
+    {
+      "key": "moqServerKey",
+      "section": "MoQ server",
+      "type": "string",
+      "default": "auto.key",
+      "description": "Path to the server key.\nThis can be generated with:\nopenssl genrsa -out server.key 2048\nopenssl req -new -x509 -sha256 -key server.key -out server.crt -days 3650\nIf set to \"auto.key\", a key is generated automatically and saved in the current folder."
+    },
+    {
+      "key": "moqServerCert",
+      "section": "MoQ server",
+      "type": "string",
+      "default": "auto.crt",
+      "description": "Path to the server certificate."
+    },
+    {
+      "key": "moqAllowOrigins",
+      "section": "MoQ server",
+      "type": "array",
+      "items": "string",
+      "default": [
+        "*"
+      ],
+      "description": "Allowed origins for CORS."
+    },
+    {
+      "key": "moqTrustedProxies",
+      "section": "MoQ server",
+      "type": "array",
+      "items": "string",
+      "default": [],
+      "description": "Proxies which are trusted to provide the client's real IP via the X-Forwarded-For header."
+    }
+  ],
+  "path": [
+    {
+      "key": "source",
+      "section": "General",
+      "type": "string",
+      "default": "publisher",
+      "description": "Source of the stream. This can be:\n* publisher -\u003e the stream is provided by a RTSP, RTMP, WebRTC or SRT client\n* rtsp://user:pass@host:port/path -\u003e the stream is pulled from another RTSP server / camera\n* rtsps://user:pass@host:port/path -\u003e the stream is pulled from another RTSP server / camera with RTSPS\n* rtsp+http://user:pass@host:port/path -\u003e the stream is pulled from another RTSP server / camera, with HTTP tunneling\n* rtsps+http://user:pass@host:port/path -\u003e the stream is pulled from another RTSP server / camera, with HTTPS tunneling\n* rtsp+ws://user:pass@host:port/path -\u003e the stream is pulled from another RTSP server / camera, with WebSocket tunneling\n* rtsps+ws://user:pass@host:port/path -\u003e the stream is pulled from another RTSP server / camera, with secure WebSocket tunneling\n* rtmp://user:pass@host:port/path#streamKey -\u003e the stream is pulled from another RTMP server / camera\n* rtmps://user:pass@host:port/path#streamKey -\u003e the stream is pulled from another RTMP server / camera with RTMPS\n* http://user:pass@host:port/stream.m3u8 -\u003e the stream is pulled from another HLS server / camera\n* https://user:pass@host:port/stream.m3u8 -\u003e the stream is pulled from another HLS server / camera with HTTPS\n* udp+mpegts://ip:port -\u003e the stream is pulled from MPEG-TS over UDP, by listening on the specified address\n* unix+mpegts://socketPath -\u003e the stream is pulled from MPEG-TS over a Unix socket\n* udp+rtp://ip:port -\u003e the stream is pulled from RTP over UDP, by listening on the specified address\n* srt://host:port?streamid=streamid -\u003e the stream is pulled from another SRT server / camera\n* moqt://user:pass@host:port/path -\u003e the stream is pulled from another MoQ server\n* whep://host:port/path -\u003e the stream is pulled from another WebRTC server / camera with HTTP+WHEP\n* wheps://host:port/path -\u003e the stream is pulled from another WebRTC server / camera with HTTPS+WHEP\n* redirect -\u003e the stream is provided by another path or server\n* rpiCamera -\u003e the stream is provided by a Raspberry Pi Camera\nThe following variables can be used:\n* $MTX_QUERY: query parameters (passed by first reader)\n* $G1, $G2, ...: regular expression groups, if path name is a regular expression."
+    },
+    {
+      "key": "sourceFingerprint",
+      "section": "General",
+      "type": "string",
+      "default": null,
+      "description": "If the source is a URL, and the source TLS certificate is self-signed\nor invalid, you can provide the fingerprint of the certificate in order to\nvalidate it anyway. It can be obtained by running:\nopenssl s_client -connect source_ip:source_port \u003c/dev/null 2\u003e/dev/null | sed -n '/BEGIN/,/END/p' \u003e server.crt\nopenssl x509 -in server.crt -noout -fingerprint -sha256 | cut -d \"=\" -f2 | tr -d ':'"
+    },
+    {
+      "key": "sourceOnDemand",
+      "section": "General",
+      "type": "boolean",
+      "default": false,
+      "description": "If the source is a URL, it will be pulled only when at least\none reader is connected, saving bandwidth."
+    },
+    {
+      "key": "sourceOnDemandStartTimeout",
+      "section": "General",
+      "type": "string",
+      "default": "10s",
+      "description": "If sourceOnDemand is \"yes\", readers will be put on hold until the source is\nready or until this amount of time has passed."
+    },
+    {
+      "key": "sourceOnDemandCloseAfter",
+      "section": "General",
+      "type": "string",
+      "default": "10s",
+      "description": "If sourceOnDemand is \"yes\", the source will be closed when there are no\nreaders connected and this amount of time has passed."
+    },
+    {
+      "key": "maxReaders",
+      "section": "General",
+      "type": "integer",
+      "default": 0,
+      "description": "Maximum number of readers. Zero means no limit."
+    },
+    {
+      "key": "srtReadPassphrase",
+      "section": "General",
+      "type": "string",
+      "default": null,
+      "description": "SRT encryption passphrase required to read from this path."
+    },
+    {
+      "key": "useAbsoluteTimestamp",
+      "section": "General",
+      "type": "boolean",
+      "default": false,
+      "description": "Use absolute timestamp of frames, instead of replacing them with the current time."
+    },
+    {
+      "key": "alwaysAvailable",
+      "section": "Always available",
+      "type": "boolean",
+      "default": false,
+      "description": "Enable always-available mode, in which an offline segment is played on repeat when the stream is not available."
+    },
+    {
+      "key": "alwaysAvailableTracks",
+      "section": "Always available",
+      "type": "array",
+      "items": "object",
+      "default": [],
+      "description": "Tracks of the default offline segment."
+    },
+    {
+      "key": "alwaysAvailableFile",
+      "section": "Always available",
+      "type": "string",
+      "default": "",
+      "description": "An MP4 file can be used instead of the default offline segment."
+    },
+    {
+      "key": "alwaysAvailableRecorded",
+      "section": "Always available",
+      "type": "boolean",
+      "default": true,
+      "description": "If recording is enabled, record the stream even while the source is offline and\nthe offline segment is playing. Set to false to record only while a source is connected."
+    },
+    {
+      "key": "forward",
+      "section": "Forward",
+      "type": "array",
+      "items": "object",
+      "default": [],
+      "description": "Forward the stream of this path to one or more external servers."
+    },
+    {
+      "key": "record",
+      "section": "Record",
+      "type": "boolean",
+      "default": false,
+      "description": "Record streams to disk."
+    },
+    {
+      "key": "recordPath",
+      "section": "Record",
+      "type": "string",
+      "default": "./recordings/%path/%Y-%m-%d_%H-%M-%S-%f",
+      "description": "Path of recording segments.\nExtension is added automatically.\nAvailable variables are %path (path name), %Y %m %d (year, month, day),\n%H %M %S (hours, minutes, seconds), %f (microseconds), %z (time zone), %s (unix epoch)."
+    },
+    {
+      "key": "recordFormat",
+      "section": "Record",
+      "type": "string",
+      "default": "fmp4",
+      "description": "Format of recorded segments.\nAvailable formats are \"fmp4\" (fragmented MP4) and \"mpegts\" (MPEG-TS)."
+    },
+    {
+      "key": "recordPartDuration",
+      "section": "Record",
+      "type": "string",
+      "default": "1s",
+      "description": "fMP4 segments are concatenation of small MP4 files (parts), each with this duration.\nMPEG-TS segments are concatenation of 188-bytes packets, flushed to disk with this period.\nWhen a system failure occurs, the last part gets lost.\nTherefore, the part duration is equal to the RPO (recovery point objective)."
+    },
+    {
+      "key": "recordMaxPartSize",
+      "section": "Record",
+      "type": "string",
+      "default": "50M",
+      "description": "This prevents RAM exhaustion."
+    },
+    {
+      "key": "recordSegmentDuration",
+      "section": "Record",
+      "type": "string",
+      "default": "1h",
+      "description": "Minimum duration of each segment."
+    },
+    {
+      "key": "recordDeleteAfter",
+      "section": "Record",
+      "type": "string",
+      "default": "1d",
+      "description": "Delete segments after this timespan.\nSet to 0s to disable automatic deletion."
+    },
+    {
+      "key": "overridePublisher",
+      "section": "Publisher source (when source is \"publisher\")",
+      "type": "boolean",
+      "default": true,
+      "description": "Allow another client to disconnect the current publisher and publish in its place."
+    },
+    {
+      "key": "srtPublishPassphrase",
+      "section": "Publisher source (when source is \"publisher\")",
+      "type": "string",
+      "default": null,
+      "description": "SRT encryption passphrase required to publish to this path."
+    },
+    {
+      "key": "rtspDemuxMpegts",
+      "section": "Publisher source (when source is \"publisher\")",
+      "type": "boolean",
+      "default": false,
+      "description": "Demux MPEG-TS over RTSP into elementary streams.\nWhen enabled, RTSP publishers and sources sending a single MP2T/90000 track\nwill be demultiplexed, and their elementary streams (H.264, H.265, AAC, etc.)\nexposed as native tracks.\nThis allows HLS, WebRTC, and other outputs to work transparently with MPEG-TS sources."
+    },
+    {
+      "key": "rtspTransport",
+      "section": "RTSP source (when source is a RTSP or a RTSPS URL)",
+      "type": "string",
+      "default": "automatic",
+      "description": "Transport protocol used to pull the stream. available values are \"automatic\", \"udp\", \"multicast\", \"tcp\"."
+    },
+    {
+      "key": "rtspAnyPort",
+      "section": "RTSP source (when source is a RTSP or a RTSPS URL)",
+      "type": "boolean",
+      "default": false,
+      "description": "Support sources that don't provide server ports or use random server ports. This is a security issue\nand must be used only when interacting with sources that require it."
+    },
+    {
+      "key": "rtspRangeType",
+      "section": "RTSP source (when source is a RTSP or a RTSPS URL)",
+      "type": "string",
+      "default": null,
+      "description": "Range header to send to the source, in order to start streaming from the specified offset.\navailable values:\n* clock: Absolute time\n* npt: Normal Play Time\n* smpte: SMPTE timestamps relative to the start of the recording"
+    },
+    {
+      "key": "rtspRangeStart",
+      "section": "RTSP source (when source is a RTSP or a RTSPS URL)",
+      "type": "string",
+      "default": null,
+      "description": "Available values:\n* clock: UTC ISO 8601 combined date and time string, e.g. 20230812T120000Z\n* npt: duration such as \"300ms\", \"1.5m\" or \"2h45m\", valid time units are \"ns\", \"us\" (or \"µs\"), \"ms\", \"s\", \"m\", \"h\"\n* smpte: duration such as \"300ms\", \"1.5m\" or \"2h45m\", valid time units are \"ns\", \"us\" (or \"µs\"), \"ms\", \"s\", \"m\", \"h\""
+    },
+    {
+      "key": "rtspScale",
+      "section": "RTSP source (when source is a RTSP or a RTSPS URL)",
+      "type": "string",
+      "default": null,
+      "description": "Scale header value to send to the source, in order to play the stream at a different speed.\nNegative values play in reverse, values \u003e 1 fast-forward,\nvalues 0 \u003c x \u003c 1 play slow motion."
+    },
+    {
+      "key": "rtspUDPSourcePortRange",
+      "section": "RTSP source (when source is a RTSP or a RTSPS URL)",
+      "type": "array",
+      "items": "integer",
+      "default": [
+        32768,
+        60999
+      ],
+      "description": "Range of ports used as source port in outgoing UDP packets."
+    },
+    {
+      "key": "rtpSDP",
+      "section": "RTP source (when source is RTP)",
+      "type": "string",
+      "default": null,
+      "description": "session description protocol (SDP) of the RTP stream."
+    },
+    {
+      "key": "moqTransport",
+      "section": "MoQ source (when source is a MoQ URL)",
+      "type": "string",
+      "default": "quic",
+      "description": "Transport protocol used to pull the stream. available values are \"quic\", \"webtransport\"."
+    },
+    {
+      "key": "whepBearerToken",
+      "section": "WebRTC / WHEP source (when source is WHEP)",
+      "type": "string",
+      "default": "",
+      "description": "Token to insert in the Authorization: Bearer header."
+    },
+    {
+      "key": "whepSTUNGatherTimeout",
+      "section": "WebRTC / WHEP source (when source is WHEP)",
+      "type": "string",
+      "default": "5s",
+      "description": "Maximum time to gather STUN candidates."
+    },
+    {
+      "key": "whepHandshakeTimeout",
+      "section": "WebRTC / WHEP source (when source is WHEP)",
+      "type": "string",
+      "default": "10s",
+      "description": "Time to wait for the WebRTC handshake to complete."
+    },
+    {
+      "key": "whepTrackGatherTimeout",
+      "section": "WebRTC / WHEP source (when source is WHEP)",
+      "type": "string",
+      "default": "2s",
+      "description": "Maximum time to gather tracks."
+    },
+    {
+      "key": "sourceRedirect",
+      "section": "Redirect source (when source is \"redirect\")",
+      "type": "string",
+      "default": null,
+      "description": "Path to which clients will be redirected.\nIt can be a relative path (i.e. /otherstream) or an absolute RTSP URL."
+    },
+    {
+      "key": "rpiCameraCamID",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "integer",
+      "default": 0,
+      "description": "ID of the camera."
+    },
+    {
+      "key": "rpiCameraSecondary",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "boolean",
+      "default": false,
+      "description": "Whether this is a secondary stream."
+    },
+    {
+      "key": "rpiCameraWidth",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "integer",
+      "default": 1920,
+      "description": "Width of frames."
+    },
+    {
+      "key": "rpiCameraHeight",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "integer",
+      "default": 1080,
+      "description": "Height of frames."
+    },
+    {
+      "key": "rpiCameraHFlip",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "boolean",
+      "default": false,
+      "description": "Flip horizontally."
+    },
+    {
+      "key": "rpiCameraVFlip",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "boolean",
+      "default": false,
+      "description": "Flip vertically."
+    },
+    {
+      "key": "rpiCameraBrightness",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "number",
+      "default": 0,
+      "description": "Brightness [-1, 1]."
+    },
+    {
+      "key": "rpiCameraContrast",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "number",
+      "default": 1,
+      "description": "Contrast [0, 16]."
+    },
+    {
+      "key": "rpiCameraSaturation",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "number",
+      "default": 1,
+      "description": "Saturation [0, 16]."
+    },
+    {
+      "key": "rpiCameraSharpness",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "number",
+      "default": 1,
+      "description": "Sharpness [0, 16]."
+    },
+    {
+      "key": "rpiCameraExposure",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "string",
+      "default": "normal",
+      "description": "Exposure mode.\nvalues: normal, short, long, custom."
+    },
+    {
+      "key": "rpiCameraAWB",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "string",
+      "default": "auto",
+      "description": "Auto-white-balance mode.\n(auto, incandescent, tungsten, fluorescent, indoor, daylight, cloudy or custom)."
+    },
+    {
+      "key": "rpiCameraAWBGains",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "array",
+      "items": "number",
+      "default": [
+        0,
+        0
+      ],
+      "description": "Auto-white-balance fixed gains. This can be used in place of rpiCameraAWB.\nformat: [red,blue]."
+    },
+    {
+      "key": "rpiCameraDenoise",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "string",
+      "default": "off",
+      "description": "Denoise operating mode (off, cdn_off, cdn_fast, cdn_hq)."
+    },
+    {
+      "key": "rpiCameraShutter",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "integer",
+      "default": 0,
+      "description": "Fixed shutter speed, in microseconds."
+    },
+    {
+      "key": "rpiCameraMetering",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "string",
+      "default": "centre",
+      "description": "Metering mode of the AEC/AGC algorithm (centre, spot, matrix or custom)."
+    },
+    {
+      "key": "rpiCameraGain",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "number",
+      "default": 0,
+      "description": "Fixed gain."
+    },
+    {
+      "key": "rpiCameraEV",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "number",
+      "default": 0,
+      "description": "EV compensation of the image in range [-10, 10]."
+    },
+    {
+      "key": "rpiCameraROI",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "string",
+      "default": null,
+      "description": "Region of interest, in format x,y,width,height (all normalized between 0 and 1)."
+    },
+    {
+      "key": "rpiCameraHDR",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "boolean",
+      "default": false,
+      "description": "Whether to enable HDR on Raspberry Camera 3."
+    },
+    {
+      "key": "rpiCameraTuningFile",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "string",
+      "default": null,
+      "description": "Tuning file."
+    },
+    {
+      "key": "rpiCameraMode",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "string",
+      "default": null,
+      "description": "Sensor mode, in format [width]:[height]:[bit-depth]:[packing]\nbit-depth and packing are optional."
+    },
+    {
+      "key": "rpiCameraFPS",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "number",
+      "default": 30,
+      "description": "frames per second."
+    },
+    {
+      "key": "rpiCameraAfMode",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "string",
+      "default": "continuous",
+      "description": "Autofocus mode (auto, manual or continuous)."
+    },
+    {
+      "key": "rpiCameraAfRange",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "string",
+      "default": "normal",
+      "description": "Autofocus range (normal, macro or full)."
+    },
+    {
+      "key": "rpiCameraAfSpeed",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "string",
+      "default": "normal",
+      "description": "Autofocus speed (normal or fast)."
+    },
+    {
+      "key": "rpiCameraLensPosition",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "number",
+      "default": 0,
+      "description": "Lens position (for manual autofocus only), will be set to focus to a specific distance\ncalculated by the following formula: d = 1 / value\nExamples: 0 moves the lens to infinity.\n0.5 moves the lens to focus on objects 2m away.\n2 moves the lens to focus on objects 50cm away."
+    },
+    {
+      "key": "rpiCameraAfWindow",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "string",
+      "default": null,
+      "description": "Autofocus window, in the form x,y,width,height where the coordinates\nare given as a proportion of the entire image."
+    },
+    {
+      "key": "rpiCameraFlickerPeriod",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "integer",
+      "default": 0,
+      "description": "Manual flicker correction period, in microseconds."
+    },
+    {
+      "key": "rpiCameraTextOverlayEnable",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "boolean",
+      "default": false,
+      "description": "Enables printing text on each frame."
+    },
+    {
+      "key": "rpiCameraTextOverlay",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "string",
+      "default": "%Y-%m-%d %H:%M:%S - MediaMTX",
+      "description": "Text that is printed on each frame.\nformat is the one of the strftime() function."
+    },
+    {
+      "key": "rpiCameraCodec",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "string",
+      "default": "auto",
+      "description": "Codec (auto, hardwareH264, softwareH264 or mjpeg).\nWhen is \"auto\", it defaults to:\n* hardwareH264 when stream is primary and hardware encoder is available\n* softwareH264 when stream is primary and hardware encoder is not available\n* mjpeg when stream is secondary"
+    },
+    {
+      "key": "rpiCameraIDRPeriod",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "integer",
+      "default": 60,
+      "description": "Period between IDR frames (when codec is hardwareH264 or softwareH264)."
+    },
+    {
+      "key": "rpiCameraBitrate",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "integer",
+      "default": 5000000,
+      "description": "Bitrate (when codec is hardwareH264 or softwareH264)."
+    },
+    {
+      "key": "rpiCameraH264Profile",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "string",
+      "default": "auto",
+      "description": "H264 profile (auto, baseline, main or high).\nWhen is \"auto\", it defaults to:\n* main when codec is hardwareH264\n* baseline when codec is softwareH264"
+    },
+    {
+      "key": "rpiCameraH264Level",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "string",
+      "default": "4.1",
+      "description": "H264 level (4.0, 4.1 or 4.2)."
+    },
+    {
+      "key": "rpiCameraMJPEGQuality",
+      "section": "Raspberry Pi Camera source (when source is \"rpiCamera\")",
+      "type": "integer",
+      "default": 60,
+      "description": "M-JPEG quality (0-100)."
+    },
+    {
+      "key": "runOnInit",
+      "section": "Hooks",
+      "type": "string",
+      "default": null,
+      "description": "Command to run when this path is initialized.\nThis can be used to publish a stream when the server is launched.\nThis is terminated with SIGINT when the program closes.\nThe following environment variables are available:\n* MTX_PATH: path name\n* RTSP_PORT: RTSP server port\n* G1, G2, ...: regular expression groups, if path name is\na regular expression."
+    },
+    {
+      "key": "runOnInitRestart",
+      "section": "Hooks",
+      "type": "boolean",
+      "default": false,
+      "description": "Restart the command if it exits."
+    },
+    {
+      "key": "runOnDemand",
+      "section": "Hooks",
+      "type": "string",
+      "default": null,
+      "description": "Command to run when this path is requested by a reader\nand no one is publishing to this path yet.\nThis can be used to publish a stream on demand.\nThis is terminated with SIGINT when there are no readers anymore.\nThe following environment variables are available:\n* MTX_PATH: path name\n* MTX_QUERY: query parameters (passed by first reader) (url-encoded)\n* RTSP_PORT: RTSP server port\n* G1, G2, ...: regular expression groups, if path name is\na regular expression."
+    },
+    {
+      "key": "runOnDemandRestart",
+      "section": "Hooks",
+      "type": "boolean",
+      "default": false,
+      "description": "Restart the command if it exits."
+    },
+    {
+      "key": "runOnDemandStartTimeout",
+      "section": "Hooks",
+      "type": "string",
+      "default": "10s",
+      "description": "Readers will be put on hold until the runOnDemand command starts publishing\nor until this amount of time has passed."
+    },
+    {
+      "key": "runOnDemandCloseAfter",
+      "section": "Hooks",
+      "type": "string",
+      "default": "10s",
+      "description": "The command will be closed when there are no\nreaders connected and this amount of time has passed."
+    },
+    {
+      "key": "runOnUnDemand",
+      "section": "Hooks",
+      "type": "string",
+      "default": null,
+      "description": "Command to run when there are no readers anymore.\nEnvironment variables are the same as runOnDemand."
+    },
+    {
+      "key": "runOnAvailable",
+      "section": "Hooks",
+      "type": "string",
+      "default": null,
+      "description": "Command to run when the stream is available to be read.\nThis is terminated with SIGINT when the stream is not available anymore.\nThe following environment variables are available:\n* MTX_PATH: path name\n* MTX_QUERY: query parameters (passed by publisher) (url-encoded)\n* MTX_SOURCE_TYPE: source type\n* MTX_SOURCE_ID: source ID\n* RTSP_PORT: RTSP server port\n* G1, G2, ...: regular expression groups, if path name is\na regular expression."
+    },
+    {
+      "key": "runOnAvailableRestart",
+      "section": "Hooks",
+      "type": "boolean",
+      "default": false,
+      "description": "Restart the command if it exits."
+    },
+    {
+      "key": "runOnUnavailable",
+      "section": "Hooks",
+      "type": "string",
+      "default": null,
+      "description": "Command to run when the stream is not available anymore.\nEnvironment variables are the same as runOnAvailable."
+    },
+    {
+      "key": "runOnOnline",
+      "section": "Hooks",
+      "type": "string",
+      "default": null,
+      "description": "Command to run when the stream is online, which means\nthat the stream is available and provided by a online source (not an offline segment).\nThis is terminated with SIGINT when the stream is not online anymore.\nThe following environment variables are available:\n* MTX_PATH: path name\n* MTX_QUERY: query parameters (passed by publisher) (url-encoded)\n* MTX_SOURCE_TYPE: source type\n* MTX_SOURCE_ID: source ID\n* RTSP_PORT: RTSP server port\n* G1, G2, ...: regular expression groups, if path name is\na regular expression."
+    },
+    {
+      "key": "runOnOnlineRestart",
+      "section": "Hooks",
+      "type": "boolean",
+      "default": false,
+      "description": "Restart the command if it exits."
+    },
+    {
+      "key": "runOnOffline",
+      "section": "Hooks",
+      "type": "string",
+      "default": null,
+      "description": "Command to run when the stream is not online anymore.\nEnvironment variables are the same as runOnOnline."
+    },
+    {
+      "key": "runOnRead",
+      "section": "Hooks",
+      "type": "string",
+      "default": null,
+      "description": "Command to run when a client starts reading.\nThis is terminated with SIGINT when a client stops reading.\nThe following environment variables are available:\n* MTX_PATH: path name\n* MTX_QUERY: query parameters (passed by reader) (url-encoded)\n* MTX_READER_TYPE: reader type\n* MTX_READER_ID: reader ID\n* RTSP_PORT: RTSP server port\n* G1, G2, ...: regular expression groups, if path name is\na regular expression."
+    },
+    {
+      "key": "runOnReadRestart",
+      "section": "Hooks",
+      "type": "boolean",
+      "default": false,
+      "description": "Restart the command if it exits."
+    },
+    {
+      "key": "runOnUnread",
+      "section": "Hooks",
+      "type": "string",
+      "default": null,
+      "description": "Command to run when a client stops reading.\nEnvironment variables are the same as runOnRead."
+    },
+    {
+      "key": "runOnRecordSegmentCreate",
+      "section": "Hooks",
+      "type": "string",
+      "default": null,
+      "description": "Command to run when a recording segment is created.\nThe following environment variables are available:\n* MTX_PATH: path name\n* MTX_SEGMENT_PATH: segment file path\n* RTSP_PORT: RTSP server port\n* G1, G2, ...: regular expression groups, if path name is\na regular expression."
+    },
+    {
+      "key": "runOnRecordSegmentComplete",
+      "section": "Hooks",
+      "type": "string",
+      "default": null,
+      "description": "Command to run when a recording segment is complete.\nThe following environment variables are available:\n* MTX_PATH: path name\n* MTX_SEGMENT_PATH: segment file path\n* MTX_SEGMENT_DURATION: segment duration\n* RTSP_PORT: RTSP server port\n* G1, G2, ...: regular expression groups, if path name is\na regular expression."
+    }
+  ]
+}

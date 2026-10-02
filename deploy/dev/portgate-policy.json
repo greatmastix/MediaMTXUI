@@ -1,0 +1,19 @@
+{
+  "driver": "dry-run",
+  "dryRunFile": "/data/portgate-status/ufw.rules",
+  "desired": "/data/portgate/desired.json",
+  "stateDir": "/data/portgate-status",
+  "ports": {
+    "rtsp": { "proto": "tcp", "port": 8554 },
+    "rtmp": { "proto": "tcp", "port": 1935 },
+    "srt": { "proto": "udp", "port": 8890 },
+    "webrtc": { "proto": "udp", "port": 8189 }
+  },
+  "allowAnySource": true,
+  "maxTTLAnySource": "12h",
+  "maxTTL": "720h",
+  "permanentOK": false,
+  "maxSources": 8,
+  "minPrefixV4": 16,
+  "minPrefixV6": 48
+}

@@ -1,0 +1,19 @@
+# Applies the MediaMTX UI's exposure requests: converges the ufw rules marked mtx-portgate: to the sidecar's
+# desired.json within /etc/mtx-portgate/policy.json. Started by mtx-portgate.path (a new request) and
+# mtx-portgate.timer (expiry, and the backstop for missed path events). Installed by deploy/portgate/install.sh.
+[Unit]
+Description=Apply MediaMTX UI exposure requests (mtx-portgate)
+After=network-online.target ufw.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mtx-portgate apply
+TimeoutStartSec=4min
+UMask=0022
+# ufw writes /etc/ufw and needs iptables. A policy "verify" command that needs setuid (sudo) rules out
+# NoNewPrivileges; without one it could be added. What can be closed off either way:
+ProtectSystem=true
+ProtectHome=read-only
+PrivateTmp=yes
+ReadWritePaths=/var/lib/mtx-portgate

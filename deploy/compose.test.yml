@@ -1,0 +1,52 @@
+# Shared by the dev stack (`./dev up`, with compose.dev.yml) and the e2e stack (`./dev e2e`, with compose.e2e.yml),
+# on top of ../compose.yaml: the sidecar image built from this checkout, plain HTTP, exposure control on (with the
+# helper's dry-run driver), a fixed subnet, nothing published, and a test-pattern publisher on path "test". The
+# publisher uses the dev-only stream credential "devpub", which `./dev` creates with `mtxui credential add`.
+services:
+  mediamtx:
+    ports: !reset []
+
+  sidecar:
+    image: mediamtx-ui:dev
+    build:
+      context: ..
+    ports: !reset []
+    environment:
+      MTXUI_TLS: "off"
+      MTXUI_STACK_SUBNET: ${MTX_SUBNET:?}
+      MTXUI_EXPOSURE_CONTROL: "on"
+
+  publisher:
+    image: ${TEST_PUBLISHER_IMAGE:?}
+    user: "10002:10002"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    networks: [mtx]
+    entrypoint: ["/bin/sh", "-c"]
+    environment:
+      DEV_PUBLISHER_SECRET: ${DEV_PUBLISHER_SECRET:?}
+    # H.264 + Opus, so the same stream plays over WebRTC and HLS. Retries until MediaMTX accepts it: RTSP is off until
+    # setup switches it on, and the credential may not exist yet. $$ keeps compose from interpolating.
+    command:
+      - |
+        while :; do
+          ffmpeg -hide_banner -loglevel error \
+            -re -f lavfi -i testsrc2=size=1280x720:rate=30 \
+            -re -f lavfi -i sine=frequency=440:sample_rate=48000 \
+            -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -g 60 -b:v 1500k \
+            -c:a libopus -b:a 64k \
+            -f rtsp -rtsp_transport tcp "rtsp://devpub:$${DEV_PUBLISHER_SECRET}@mediamtx:8554/test"
+          sleep 2
+        done
+    cpus: 1.0
+    mem_limit: 256m
+    pids_limit: 64
+    depends_on: [mediamtx]
+
+networks:
+  mtx:
+    ipam:
+      config:
+        - subnet: ${MTX_SUBNET:?}

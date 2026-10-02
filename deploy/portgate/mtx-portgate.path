@@ -1,0 +1,11 @@
+# Runs mtx-portgate when the sidecar writes a new desired.json. The directory is watched, not the file: the sidecar
+# replaces the file by renaming a new one into place.
+[Unit]
+Description=Watch the MediaMTX UI's exposure requests
+
+[Path]
+PathChanged=/var/lib/mtx-portgate-requests
+Unit=mtx-portgate.service
+
+[Install]
+WantedBy=multi-user.target

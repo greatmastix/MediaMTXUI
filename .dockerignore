@@ -1,0 +1,8 @@
+# Only web/ and sidecar/ go into the image build.
+*
+!web
+!sidecar
+web/node_modules
+web/dist
+web/coverage
+sidecar/internal/webui/dist

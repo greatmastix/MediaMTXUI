@@ -1,0 +1,176 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-signal: var(--signal);
+  --color-good: var(--good);
+  --color-warning: var(--warning);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* The palette: near-black surfaces, one red accent,
+   red and blue as the first two chart series. Dark is the default; the light theme keeps the same accent. --signal is the
+   dashboard's red for marks (live dot, section bars, the current page); --primary is a shade deeper in the dark theme,
+   so white text on filled buttons meets WCAG AA. */
+:root {
+  --background: #f6f6f7;
+  --foreground: #16161a;
+  --card: #ffffff;
+  --card-foreground: #16161a;
+  --popover: #ffffff;
+  --popover-foreground: #16161a;
+  --primary: #d42f3a;
+  --primary-foreground: #ffffff;
+  --signal: #d42f3a;
+  --secondary: #ececef;
+  --secondary-foreground: #16161a;
+  --muted: #ececef;
+  --muted-foreground: #5c5c66;
+  --accent: #e6e6ea;
+  --accent-foreground: #16161a;
+  --destructive: #c62f39;
+  --border: #dcdce1;
+  --input: #d2d2d8;
+  --ring: #d42f3a;
+  --chart-1: #d9474a;
+  --chart-2: #2f74cc;
+  --chart-3: #c88a0c;
+  --chart-4: #178f80;
+  --chart-5: #7c5cd6;
+  --good: #0a8a0a;
+  --warning: #b77f06;
+  --radius: 0.75rem;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #16161a;
+  --sidebar-primary: #d42f3a;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #ececef;
+  --sidebar-accent-foreground: #16161a;
+  --sidebar-border: #dcdce1;
+  --sidebar-ring: #d42f3a;
+}
+
+.dark {
+  --background: #0c0c0e;
+  --foreground: #f3f3f4;
+  --card: #151517;
+  --card-foreground: #f3f3f4;
+  --popover: #1c1c1f;
+  --popover-foreground: #f3f3f4;
+  --primary: #d6323d;
+  --primary-foreground: #ffffff;
+  --signal: #ef4b55;
+  --secondary: #1c1c1f;
+  --secondary-foreground: #f3f3f4;
+  --muted: #1c1c1f;
+  --muted-foreground: #b3b3ba;
+  --accent: #252529;
+  --accent-foreground: #f3f3f4;
+  --destructive: #ff5f68;
+  --border: #2a2a2f;
+  --input: #2a2a2f;
+  --ring: #ef4b55;
+  --chart-1: #e66767;
+  --chart-2: #3987e5;
+  --chart-3: #fab219;
+  --chart-4: #2fb8a6;
+  --chart-5: #a78bfa;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --sidebar: #0c0c0e;
+  --sidebar-foreground: #f3f3f4;
+  --sidebar-primary: #ef4b55;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #1c1c1f;
+  --sidebar-accent-foreground: #f3f3f4;
+  --sidebar-border: #2a2a2f;
+  --sidebar-ring: #ef4b55;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+@layer components {
+  /* Section headings as on the server dashboard: small caps with a red bar. */
+  .section-title {
+    @apply flex items-center gap-2.5 text-[13px] font-semibold tracking-[0.08em] text-muted-foreground uppercase;
+  }
+  .section-title::before {
+    content: '';
+    @apply h-[13px] w-[3px] shrink-0 rounded-sm bg-signal;
+  }
+  /* The live dot pulses in the accent colour. */
+  .live-pulse {
+    animation: live-pulse 2s infinite;
+  }
+}
+
+@keyframes live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--signal) 50%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-pulse {
+    animation: none;
+  }
+}

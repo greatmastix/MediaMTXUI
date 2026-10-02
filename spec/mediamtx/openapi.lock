@@ -1,0 +1,4 @@
+# Written by `./dev bump-mediamtx`. The vendored spec must match upstream at this version byte for byte.
+version=1.21.1
+url=https://raw.githubusercontent.com/bluenviron/mediamtx/v1.21.1/api/openapi.yaml
+sha256=bd38cc3cb2bbf28026aa609ef9e8ed14657e96d1e081dadf319a7fa4f2790c50

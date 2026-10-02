@@ -1,0 +1,14 @@
+# Exposure control (docs/exposure-control.md): the stream ports stay closed to the internet until an admin opens
+# them on the Exposure page, or an encoder's address is let in while its stream page is open. It needs the host
+# helper mtx-portgate and a firewall in front of Docker's published ports (a cloud firewall, for one). Use it on
+# top of compose.yaml (and deploy/compose.behind-proxy.yaml, if you use that):
+#
+#   docker compose -f compose.yaml -f deploy/compose.exposure.yaml up -d
+services:
+  sidecar:
+    environment:
+      MTXUI_EXPOSURE_CONTROL: "on"
+    volumes:
+      # The sidecar writes the wanted rules here; the helper reads them and writes its status back (read-only here).
+      - ${PORTGATE_DIR:-/var/lib/mtx-portgate-requests}:/data/portgate
+      - ${PORTGATE_STATUS_DIR:-/var/lib/mtx-portgate}:/data/portgate-status:ro

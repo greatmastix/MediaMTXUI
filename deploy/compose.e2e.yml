@@ -1,0 +1,133 @@
+# e2e overlay, used by `./dev e2e` (project mtxe2e) on top of ../compose.yaml and compose.test.yml. It runs the stack
+# the way the public install does: uid 10002, read-only root filesystems, data on the named volumes (their mount
+# points in the sidecar image are owned by 10002, so no chown is needed), and nothing published. Playwright runs inside the
+# stack network, so PUBLIC_URL is the sidecar's address there: a dotted alias, because WebAuthn takes only a domain
+# name (or localhost) as the relying party, never a single-label name like "sidecar".
+services:
+  sidecar:
+    networks:
+      mtx:
+        aliases: [ui.mtxe2e.test]
+    environment:
+      MTXUI_PUBLIC_URL: http://ui.mtxe2e.test:9080
+      MTXUI_PUBLIC_HOST: mediamtx
+      MTXUI_LOGIN_RATE_PER_MINUTE: "600" # the tests sign in many times from one address
+      # Recordings on a 64 MB tmpfs with a small budget, checked often, so the tests see pruning and the guard.
+      # The filler leaves about 2 MiB free; pruning then frees at most the budget, so free space stays under critical.
+      MTXUI_RECORDINGS_MAX_GB: "0.004" # 4 MiB
+      MTXUI_RECORDINGS_MIN_FREE_GB: "0.008" # 8 MiB
+      MTXUI_RECORDINGS_CRITICAL_FREE_GB: "0.007" # 7 MiB
+      MTXUI_RECORDINGS_CHECK_EVERY: 2s
+      # Passkeys over plain HTTP: the passkeys spec runs its browser with this origin treated as secure.
+      MTXUI_PASSKEYS: "on"
+    volumes:
+      - data-portgate:/data/portgate
+      - data-portgate-status:/data/portgate-status:ro
+
+  # The exposure helper with the dry-run driver (rules in a file on its state volume), looping instead of systemd.
+  portgate:
+    image: mediamtx-ui:dev # the sidecar's image, built by compose.test.yml, which carries the helper
+    pull_policy: never
+    depends_on: [sidecar]
+    healthcheck: { disable: true } # the image's healthcheck is the sidecar's
+    entrypoint: ["/usr/libexec/mtxui/mtx-portgate", "-policy", "/etc/mtx-portgate/policy.json", "-every", "1s", "apply"]
+    user: "10002:10002"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [mtx]
+    volumes:
+      - ./dev/portgate-policy.json:/etc/mtx-portgate/policy.json:ro
+      - data-portgate:/data/portgate:ro
+      - data-portgate-status:/data/portgate-status
+    mem_limit: 64m
+    pids_limit: 32
+
+  # HTTPS with ACME (MTXUI_TLS=acme, the public install's mode) against Let's Encrypt's test server: Pebble validates
+  # every challenge as passed (no DNS needed), so the test checks issuance, serving and the redirect. The sidecar
+  # trusts Pebble's own HTTPS through MTXUI_ACME_CA_CERT; ./dev copies that CA out of the Pebble image first.
+  pebble:
+    image: ${PEBBLE_IMAGE:?}
+    command: ["-config", "/test/config/pebble-config.json", "-strict"]
+    environment:
+      PEBBLE_VA_ALWAYS_VALID: "1"
+      PEBBLE_VA_NOSLEEP: "1"
+    user: "10002:10002"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [mtx]
+    mem_limit: 256m
+    pids_limit: 64
+
+  sidecar-acme:
+    image: mediamtx-ui:dev
+    pull_policy: never
+    user: "10002:10002"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks:
+      mtx:
+        aliases: [acme.mtxe2e.test]
+    environment:
+      MTXUI_PUBLIC_URL: https://acme.mtxe2e.test
+      MTXUI_PUBLIC_HOST: acme.mtxe2e.test
+      MTXUI_TLS: acme
+      MTXUI_ACME_DIRECTORY: https://pebble:14000/dir
+      MTXUI_ACME_CA_CERT: /pebble/minica.pem
+      MTXUI_ACME_EMAIL: e2e@mtxe2e.test
+      MTXUI_MEDIAMTX_HOST: no-mediamtx # on its own: only its HTTPS is tested
+      MTXUI_STACK_SUBNET: ${MTX_SUBNET:?}
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /data/config:size=8m,uid=10002,gid=10002,mode=0700
+      - /data/state:size=64m,uid=10002,gid=10002,mode=0700
+      - /data/logs:size=8m,uid=10002,gid=10002,mode=0700
+      - /data/hooks:size=1m,uid=10002,gid=10002,mode=0700
+      - /data/backups:size=8m,uid=10002,gid=10002,mode=0700
+      - /holding:size=16m,uid=10002,gid=10002,mode=0700
+    volumes:
+      - ../.cache/pebble/pebble.minica.pem:/pebble/minica.pem:ro
+    mem_limit: 256m
+    pids_limit: 128
+    depends_on: [pebble, sidecar]
+
+  playwright:
+    profiles: [e2e]
+    image: ${PLAYWRIGHT_IMAGE:?}
+    user: "${DEV_UID:?}:${DEV_GID:?}"
+    working_dir: /src/e2e
+    # E2E_ARGS: extra Playwright arguments from `./dev e2e ...`, e.g. a spec file (the setup project always runs first).
+    command: ["sh", "-c", "npm ci --no-audit --no-fund && npx playwright test $$E2E_ARGS"]
+    environment:
+      HOME: /tmp
+      CI: ${CI:-}
+      npm_config_cache: /src/.cache/npm
+      BASE_URL: http://ui.mtxe2e.test:9080
+      MTX_API_URL: http://mediamtx:9997
+      MEDIAMTX_VERSION: ${MEDIAMTX_VERSION:?}
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      ADMIN_PASSWORD: ${DEV_ADMIN_PASSWORD:?}
+      E2E_ARGS: ${E2E_ARGS:-}
+      E2E_SLOW: ${E2E_SLOW:-} # ./dev e2e --slow: include the tests tagged @slow
+      SCREENSHOTS: ${SCREENSHOTS:-} # ./dev screenshots: tests/screenshots.spec.ts writes docs/screenshots/
+      SOAK_MINUTES: ${SOAK_MINUTES:-} # tests/soak.spec.ts runs only when set: SOAK_MINUTES=10 ./dev e2e tests/soak.spec.ts
+      E2E_CONTROL_DIR: /src/.cache/e2e-control # requests to ./dev: stop or start the publisher, restart MediaMTX
+    volumes:
+      - ..:/src
+    shm_size: 2gb
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [mtx]
+    mem_limit: 6g # six workers, each a Chromium with live video (playwright.config.ts)
+    pids_limit: 4096
+    depends_on:
+      sidecar:
+        condition: service_healthy
+
+volumes:
+  data-recordings:
+    driver_opts: { type: tmpfs, device: tmpfs, o: "size=64m,uid=10002,gid=10002,mode=0750" }
+  data-portgate:
+  data-portgate-status:

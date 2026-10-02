@@ -1,0 +1,17 @@
+# toolchain caches (./dev) and dev/e2e stack data
+/.cache/
+/deploy/.dev/
+# a real deployment's settings and data
+/deploy/.env
+/deploy/data/
+
+node_modules/
+*.tsbuildinfo
+/web/dist/
+/web/coverage/
+/e2e/test-results/
+/e2e/playwright-report/
+
+# the image build copies web/dist here; a checkout keeps only the placeholder
+/sidecar/internal/webui/dist/*
+!/sidecar/internal/webui/dist/.gitkeep
