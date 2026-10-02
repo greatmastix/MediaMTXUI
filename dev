@@ -69,8 +69,12 @@ run() {
   done
   [[ $# -gt 0 ]] && shift
   mkdir -p "$CACHE"
+  # At most 6 CPUs, and never more than the machine has (Docker refuses that; CI runners have 4).
+  local cpus
+  cpus=$(nproc)
+  ((cpus > 6)) && cpus=6
   docker run --rm --init --user "$USER_IDS" --network "${NET:-none}" \
-    --cap-drop ALL --security-opt no-new-privileges --memory 6g --cpus 6 --pids-limit 4096 \
+    --cap-drop ALL --security-opt no-new-privileges --memory 6g --cpus "$cpus" --pids-limit 4096 \
     -e HOME=/tmp -e CI="${CI:-}" -v "$ROOT:/src" -v "$CACHE:/cache" -w "/src/$wd" \
     ${args[@]+"${args[@]}"} "$image" "$@"
 }
