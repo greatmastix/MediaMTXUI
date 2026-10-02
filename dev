@@ -44,6 +44,8 @@ Maintenance
                         pinned MediaMTX ffmpeg image
   deps                  download Go modules and install web dependencies
   bump-mediamtx <ver>   vendor the OpenAPI spec of another MediaMTX release and update every pin
+  upgrade-test <ref>    the previous release's image makes data, this checkout's image opens it
+  fuzz [seconds]        run every Go fuzz target for a while (default 30 s each)
   screenshots           take the README's screenshots (docs/screenshots/) from a fresh e2e stack
   clean                 remove caches, node_modules, build output and dev data
 EOF
@@ -584,6 +586,53 @@ cmd_e2e() {
   check_state_files
 }
 
+# cmd_fuzz [SECONDS]: every Go fuzz target for SECONDS each (default 30); a crasher lands in testdata/fuzz/ as a test.
+cmd_fuzz() {
+  local secs=${1:-30} line pkg fn
+  mediamtx_bin
+  while IFS= read -r line; do
+    pkg=./$(dirname "${line%%:*}")
+    pkg=${pkg#./sidecar/}
+    fn=${line##*func }
+    fn=${fn%%(*}
+    step "fuzz: $fn ($pkg, ${secs}s)"
+    go_ go test -run '^$' -fuzz "^$fn\$" -fuzztime "${secs}s" "./$pkg"
+  done < <(grep -rn --include='*_test.go' '^func Fuzz' sidecar | sort)
+}
+
+# cmd_upgrade_test REF: the image built from git REF (the previous release) makes data, then this checkout's image
+# opens the same data: migrations run, and people, streams, credentials, config history and the audit log are kept.
+cmd_upgrade_test() {
+  local ref=${1:?usage: ./dev upgrade-test <git ref of the previous release>} net=mtxupgrade vol=mtxupgrade-data image
+  git rev-parse --verify -q "$ref^{commit}" >/dev/null || die "unknown git ref $ref"
+  cleanup() { docker rm -f mtxupgrade-sidecar >/dev/null 2>&1; docker volume rm -f "$vol" >/dev/null 2>&1; docker network rm "$net" >/dev/null 2>&1 || true; }
+  cleanup
+  trap cleanup RETURN
+  step "upgrade-test: the image of $ref"
+  git archive --format=tar "$ref" | docker build -q -t mediamtx-ui:upgrade-old - >/dev/null
+  cmd_build
+  docker network create "$net" >/dev/null
+  docker volume create "$vol" >/dev/null
+  # The sidecar alone (no MediaMTX: its probe just says so), as the public install runs it.
+  local env=(-e MTXUI_PUBLIC_URL=http://ui.upgrade.test:9080 -e MTXUI_PUBLIC_HOST=ui.upgrade.test -e MTXUI_MEDIAMTX_HOST=no-mediamtx)
+  for image in mediamtx-ui:upgrade-old mediamtx-ui:dev; do
+    step "upgrade-test: $image"
+    if [[ $image == mediamtx-ui:upgrade-old ]]; then
+      echo upgrade-test-password-1 | docker run --rm -i --user 10002:10002 --tmpfs /tmp:mode=1777 "${env[@]}" -v "$vol:/data" "$image" setup --username admin --ingest rtsp
+      docker run --rm --user 10002:10002 --tmpfs /tmp:mode=1777 "${env[@]}" -v "$vol:/data" "$image" \
+        credential add --name upgrade-cam --actions publish --paths cam >/dev/null
+    fi
+    docker run -d --name mtxupgrade-sidecar --network "$net" --network-alias ui.upgrade.test --user 10002:10002 \
+      --read-only --tmpfs /tmp:mode=1777 --cap-drop ALL --security-opt no-new-privileges "${env[@]}" -v "$vol:/data" "$image" >/dev/null
+    docker run --rm --network "$net" --user "$USER_IDS" -v "$ROOT/scripts:/scripts:ro" "$NODE_IMAGE" \
+      node /scripts/upgrade-check.mjs http://ui.upgrade.test:9080 http://ui.upgrade.test:9080 \
+      "$([[ $image == mediamtx-ui:upgrade-old ]] && echo before || echo after)" ||
+      { docker logs mtxupgrade-sidecar 2>&1 | tail -20; die "upgrade-test failed with $image"; }
+    docker rm -f mtxupgrade-sidecar >/dev/null
+  done
+  step "upgrade-test: $ref -> this checkout ok"
+}
+
 cmd_screenshots() {
   mkdir -p docs/screenshots
   SCREENSHOTS=1 cmd_e2e tests/screenshots.spec.ts
@@ -667,6 +716,8 @@ case $cmd in
   deps) cmd_deps ;;
   bump-mediamtx) cmd_bump_mediamtx "$@" ;;
   screenshots) cmd_screenshots ;;
+  fuzz) cmd_fuzz "$@" ;;
+  upgrade-test) cmd_upgrade_test "$@" ;;
   offline-clips) cmd_offline_clips ;;
   clean) cmd_clean ;;
   help | -h | --help) usage ;;

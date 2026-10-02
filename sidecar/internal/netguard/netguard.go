@@ -84,7 +84,7 @@ func (g *Guard) CheckHost(ctx context.Context, host string) error {
 	if a, err := netip.ParseAddr(host); err == nil {
 		return g.CheckAddr(a)
 	}
-	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+	if name := strings.ToLower(strings.TrimSuffix(host, ".")); name == "localhost" || strings.HasSuffix(name, ".localhost") {
 		return fmt.Errorf("%s is loopback: MediaMTX itself", host)
 	}
 	addrs, err := g.resolve(ctx, host)
