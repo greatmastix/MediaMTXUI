@@ -148,15 +148,24 @@ func scanPasskey(row scanner) (Passkey, error) {
 }
 
 // AddPasskey stores a new passkey.
-func (s *Store) AddPasskey(ctx context.Context, p Passkey) (Passkey, error) {
+// ErrLimit is returned when a user already has as many of something as allowed.
+var ErrLimit = errors.New("limit reached")
+
+// AddPasskey stores a passkey unless the user already has max: the count is part of the insert, so parallel
+// registrations cannot get past it.
+func (s *Store) AddPasskey(ctx context.Context, p Passkey, maxPerUser int) (Passkey, error) {
 	p.CreatedAt = s.now()
 	res, err := s.db.ExecContext(ctx, `INSERT INTO passkeys (user_id, credential_id, credential, name, created_at)
-		VALUES (?, ?, ?, ?, ?)`, p.UserID, p.CredentialID, p.Credential, p.Name, ms(p.CreatedAt))
+		SELECT ?, ?, ?, ?, ? WHERE (SELECT count(*) FROM passkeys WHERE user_id = ?) < ?`,
+		p.UserID, p.CredentialID, p.Credential, p.Name, ms(p.CreatedAt), p.UserID, maxPerUser)
 	if isUniqueViolation(err) {
 		return Passkey{}, ErrExists
 	}
 	if err != nil {
 		return Passkey{}, err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return Passkey{}, ErrLimit
 	}
 	p.ID, err = res.LastInsertId()
 	return p, err

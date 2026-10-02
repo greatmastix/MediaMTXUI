@@ -113,8 +113,8 @@ func (s *Server) auditExport(w http.ResponseWriter, r *http.Request) {
 	for _, e := range entries(events) {
 		d, _ := json.Marshal(e.Details)
 		_ = cw.Write([]string{
-			strconv.FormatInt(e.ID, 10), e.At.UTC().Format(time.RFC3339), csvSafe(e.Actor), e.IP,
-			e.Action, csvSafe(e.Target), csvSafe(string(d)),
+			strconv.FormatInt(e.ID, 10), e.At.UTC().Format(time.RFC3339), csvSafe(e.Actor), csvSafe(e.IP),
+			csvSafe(e.Action), csvSafe(e.Target), csvSafe(string(d)),
 		})
 	}
 	cw.Flush()

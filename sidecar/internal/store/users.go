@@ -85,6 +85,14 @@ func (s *Store) UpdatePasswordHash(ctx context.Context, id int64, hash string) e
 	return err
 }
 
+// RehashPassword replaces a password hash with a fresh one of the same password, only if the stored hash is still old
+// (the one just verified): a password changed meanwhile is not overwritten.
+func (s *Store) RehashPassword(ctx context.Context, id int64, old, hash string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ? AND password_hash = ?`,
+		hash, ms(s.now()), id, old)
+	return err
+}
+
 // SetUserRole changes a user's role.
 func (s *Store) SetUserRole(ctx context.Context, id int64, role string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE users SET role = ?, updated_at = ? WHERE id = ?`, role, ms(s.now()), id)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -302,4 +303,55 @@ func (p *peers) allowed(ctx context.Context, a netip.Addr) bool {
 		known = slices.Contains(p.addrs, a)
 	}
 	return known
+}
+
+// Request bodies: how long a client may take to send one. The server has no ReadTimeout, which would also cut the
+// long-lived responses (the event stream, the log tail, downloads); instead a request with a body gets this long to
+// send it, and the deadline is lifted once the body has been read. Uploads extend it (extendBodyDeadline).
+var bodyReadTimeout = 30 * time.Second
+
+// bodyDeadline sets the read deadline for a request's body.
+func bodyDeadline(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil && r.Body != http.NoBody && r.ContentLength != 0 {
+			rc := http.NewResponseController(w)
+			if rc.SetReadDeadline(time.Now().Add(bodyReadTimeout)) == nil {
+				r.Body = &deadlineBody{ReadCloser: r.Body, rc: rc}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// deadlineBody lifts the read deadline once the body is read to its end (or fails, or is closed): the connection's
+// background read then waits for the next request without a deadline that would cancel this one.
+type deadlineBody struct {
+	io.ReadCloser
+	rc   *http.ResponseController
+	done bool
+}
+
+func (b *deadlineBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil {
+		b.lift()
+	}
+	return n, err
+}
+
+func (b *deadlineBody) Close() error {
+	b.lift()
+	return b.ReadCloser.Close()
+}
+
+func (b *deadlineBody) lift() {
+	if !b.done {
+		b.done = true
+		_ = b.rc.SetReadDeadline(time.Time{})
+	}
+}
+
+// extendBodyDeadline gives an upload longer to arrive than bodyReadTimeout.
+func extendBodyDeadline(w http.ResponseWriter, d time.Duration) {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(d))
 }

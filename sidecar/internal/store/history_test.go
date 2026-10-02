@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -56,5 +57,25 @@ func TestHistory(t *testing.T) {
 	}
 	if left, _ := s.PathHistory(ctx, "live/a", t0, t0.Add(time.Hour), time.Minute); len(left) != 10 || left[0].InBps != 0 {
 		t.Fatalf("path rows after pruning: %+v", left)
+	}
+}
+
+// The config history keeps its newest versions and forgets the oldest, a hundred at a time.
+func TestSnapshotsPruned(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	for i := range keepSnapshots + pruneSlack + 1 {
+		if _, err := s.InsertSnapshot(ctx, []byte(fmt.Sprintf("v: %d\n", i)), "a", "r"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var n int
+	_ = s.db.QueryRowContext(ctx, `SELECT count(*) FROM config_snapshots`).Scan(&n)
+	if n != keepSnapshots {
+		t.Fatalf("%d versions kept", n)
+	}
+	latest, err := s.LatestSnapshot(ctx)
+	if err != nil || string(latest.Content) != fmt.Sprintf("v: %d\n", keepSnapshots+pruneSlack) {
+		t.Fatalf("latest %q %v", latest.Content, err)
 	}
 }

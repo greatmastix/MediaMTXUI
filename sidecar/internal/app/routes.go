@@ -36,7 +36,7 @@ func (s *Server) Routes() []Route { return s.routes }
 func (s *Server) Public() http.Handler {
 	s.routes = nil
 	r := chi.NewRouter()
-	r.Use(s.recoverer, s.securityHeaders, s.resolver.Middleware, s.requestLog, s.unsafeGate, s.loadSession, s.watchProxy,
+	r.Use(s.recoverer, bodyDeadline, s.securityHeaders, s.resolver.Middleware, s.requestLog, s.unsafeGate, s.loadSession, s.watchProxy,
 		s.d.Audit.Middleware(actor), s.csrf)
 
 	r.Route("/api", func(api chi.Router) {

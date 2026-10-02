@@ -94,6 +94,8 @@ func TestRules(t *testing.T) {
 		{"SRT on WebRTC's UDP port", replace("srt: no", "srt: yes\nsrtAddress: :8189"), "both listen on udp port 8189"},
 		{"RTSP over UDP on the SRT port", []byte(strings.NewReplacer("rtspTransports: [tcp]", "rtspTransports: [udp, tcp]\nrtpAddress: :8890",
 			"srt: no", "srt: yes").Replace(good)), "both listen on udp port 8890"},
+		{"metrics on the RTMP port", replace("metricsAddress: :9998", "metricsAddress: :1935"), "metricsAddress must not use port 1935"},
+		{"playback on the SRT port", replace("playbackAddress: :9996", "playbackAddress: 0.0.0.0:8890"), "playbackAddress must not use port 8890"},
 		{"record outside /recordings", replace("/recordings/%path/", "/etc/%path/"), "under /recordings/"},
 		{"record with ..", replace("/recordings/%path/", "/recordings/../%path/"), `must not contain ".."`},
 		{"record without %path", replace("/recordings/%path/%Y", "/recordings/all/%Y"), "must contain %path"},
@@ -111,7 +113,7 @@ func TestRules(t *testing.T) {
 		"TCP and UDP on one port": replace("srt: no", "srt: yes\nsrtAddress: :8888"),
 		"one port on two hosts": []byte(strings.NewReplacer("apiAddress: :9997", "apiAddress: 127.0.0.1:8000",
 			"metricsAddress: :9998", "metricsAddress: 10.0.0.1:8000").Replace(good)),
-		"disabled server's default": replace("rtmp: no", "rtmp: no\nhlsAddress: :1935"),
+		"disabled server's default": replace("hls: yes", "hls: yes\nhlsAddress: :1936"), // RTMPS's, which is off
 		"regex path":                with("  ~^cam[0-9]+$:\n"),
 		"booleans as true/false":    replace("api: yes", "api: true"),
 	} {

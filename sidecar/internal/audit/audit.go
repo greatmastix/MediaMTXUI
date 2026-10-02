@@ -106,14 +106,17 @@ func (r *Recorder) Middleware(actor func(*http.Request) (string, *int64)) func(h
 				name = "anonymous"
 			}
 			action := e.action
-			if action == "" {
-				pattern := req.URL.Path
-				if rc := chi.RouteContext(req.Context()); rc != nil && rc.RoutePattern() != "" {
-					pattern = rc.RoutePattern()
-				}
-				action = req.Method + " " + pattern
-			}
 			details := map[string]any{"status": rec.status}
+			if action == "" {
+				// A route's pattern names the action; a request no route matched gets a fixed action, and its path
+				// (the client's text) goes into the details, clipped.
+				if rc := chi.RouteContext(req.Context()); rc != nil && rc.RoutePattern() != "" {
+					action = req.Method + " " + rc.RoutePattern()
+				} else {
+					action = "request.unmatched"
+					details["path"] = req.Method + " " + req.URL.EscapedPath()
+				}
+			}
 			maps.Copy(details, e.details)
 			ip := ""
 			if a := clientip.From(req.Context()).IP; a.IsValid() {

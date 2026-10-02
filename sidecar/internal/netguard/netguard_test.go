@@ -80,9 +80,27 @@ func TestForward(t *testing.T) {
 			t.Errorf("%q refused: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"rtmp://127.0.0.1/live", "http://example.com/", "whip://sidecar:9080/x"} {
-		if err := g.CheckForward(ctx, bad); err == nil {
-			t.Errorf("%q accepted", bad)
+	for bad, why := range map[string]string{
+		"rtmp://127.0.0.1/live":      "loopback",
+		"http://example.com/":        "not a forward destination",
+		"whip://sidecar:9080/x":      "resolve",
+		"RTMP://example.com/live":    "lower case", // MediaMTX would refuse it at runtime
+		"rtmp://192.168.1.20/live":   "private network",
+		"srt://10.0.0.5:9000":        "private network",
+		"rtmps://[fd12::1]/live":     "private network",
+		"rtmp://100.64.3.4/live":     "private network",
+		"rtmp://[::ffff:10.1.1.1]/x": "private network",
+	} {
+		err := g.CheckForward(ctx, bad)
+		if err == nil || !strings.Contains(err.Error(), why) {
+			t.Errorf("%q: %v, want an error about %q", bad, err, why)
 		}
+	}
+	// Pulled sources may still come from the LAN (cameras), in lower case.
+	if err := g.CheckSource(ctx, "rtsp://192.168.1.20/cam"); err != nil {
+		t.Errorf("a LAN camera: %v", err)
+	}
+	if err := g.CheckSource(ctx, "RTSP://example.com/cam"); err == nil || !strings.Contains(err.Error(), "lower case") {
+		t.Errorf("an uppercase source scheme: %v", err)
 	}
 }

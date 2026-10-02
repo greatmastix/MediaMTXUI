@@ -39,7 +39,41 @@ func (s *Store) InsertSnapshot(ctx context.Context, content []byte, author, reas
 		return Snapshot{}, err
 	}
 	snap.ID, err = res.LastInsertId()
+	if err == nil {
+		err = s.pruneSnapshots(ctx)
+	}
 	return snap, err
+}
+
+// The config history keeps the newest keepSnapshots versions: every write adds one (a streamer's stream settings
+// too), so without a bound it would grow for ever. Pruning starts only pruneSlack versions past the bound, so it runs
+// once in that many writes.
+const (
+	keepSnapshots = 1000
+	pruneSlack    = 100
+)
+
+func (s *Store) pruneSnapshots(ctx context.Context) error {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM config_snapshots`).Scan(&n); err != nil || n <= keepSnapshots+pruneSlack {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // after Commit, a no-op
+	var cut int64 // the oldest version kept
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM config_snapshots ORDER BY id DESC LIMIT 1 OFFSET ?`, keepSnapshots-1).Scan(&cut); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE config_snapshots SET parent_id = NULL WHERE id = ?`, cut); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM config_snapshots WHERE id < ?`, cut); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // LatestSnapshot returns the newest snapshot, or ErrNotFound.

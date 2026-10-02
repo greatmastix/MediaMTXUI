@@ -34,7 +34,12 @@ const (
 	ticketTries  = 5               // codes per ticket
 	ceremonyTTL  = 5 * time.Minute // a passkey prompt
 	totpSetupTTL = 15 * time.Minute
+	// maxCeremonies bounds the passkey prompts in progress: passkey sign-in starts anonymously.
+	maxCeremonies = 10_000
 )
+
+// errFlowsFull is returned when maxCeremonies prompts are in progress.
+var errFlowsFull = errors.New("too many passkey prompts in progress")
 
 // authFlows holds what spans requests of a sign-in or a setup, in memory: second-step tickets, passkey ceremonies,
 // TOTP secrets waiting for their first code.
@@ -46,6 +51,7 @@ type authFlows struct {
 	once       sync.Once
 	wa         *webauthn.WebAuthn
 	waErr      error
+	swept      time.Time // the last sweep: at most one a second, not one per insert
 }
 
 type ticket struct {
@@ -107,8 +113,15 @@ func (s *Server) putCeremony(c ceremony) (string, error) {
 	s.flows.mu.Lock()
 	defer s.flows.mu.Unlock()
 	s.flows.init()
-	s.flows.sweep(time.Now())
-	c.expires = time.Now().Add(ceremonyTTL)
+	now := time.Now()
+	if now.Sub(s.flows.swept) > time.Second || len(s.flows.ceremonies) >= maxCeremonies {
+		s.flows.sweep(now)
+		s.flows.swept = now
+	}
+	if len(s.flows.ceremonies) >= maxCeremonies {
+		return "", errFlowsFull
+	}
+	c.expires = now.Add(ceremonyTTL)
 	s.flows.ceremonies[id] = c
 	return id, nil
 }
@@ -311,18 +324,28 @@ func (s *Server) loginCode(w http.ResponseWriter, r *http.Request) {
 
 // Passkey sign-in: discoverable credentials, so no username is needed.
 
-func (s *Server) passkeyLoginBegin(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) passkeyLoginBegin(w http.ResponseWriter, r *http.Request) {
 	wa, err := s.webAuthn()
 	if err != nil {
 		writeError(w, http.StatusNotFound, "unavailable", "Passkeys are not available on this server's address.")
 		return
 	}
-	assertion, data, err := wa.BeginDiscoverableLogin(webauthn.WithUserVerification(protocol.VerificationPreferred))
+	// Anonymous, so rate-limited per address like the password sign-in.
+	if ok, wait := s.loginRate.Allow(clientip.RateKey(clientip.From(r.Context()).IP)); !ok {
+		writeError(w, http.StatusTooManyRequests, "rate_limited", fmt.Sprintf("Too many sign-in attempts from your address. Try again in %d seconds.", retryAfter(w, wait)))
+		return
+	}
+	// User verification (fingerprint, face, PIN) is required: a passkey stands in for the password and the code.
+	assertion, data, err := wa.BeginDiscoverableLogin(webauthn.WithUserVerification(protocol.VerificationRequired))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "Cannot start a passkey sign-in.")
 		return
 	}
 	id, err := s.putCeremony(ceremony{purpose: "login", data: *data})
+	if errors.Is(err, errFlowsFull) {
+		writeError(w, http.StatusServiceUnavailable, "busy", "The server is busy. Try again.")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "Cannot start a passkey sign-in.")
 		return
@@ -485,7 +508,7 @@ func (s *Server) stepUpPasskeyBegin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no_passkey", "You have no passkey.")
 		return
 	}
-	assertion, data, err := wa.BeginLogin(who, webauthn.WithUserVerification(protocol.VerificationPreferred))
+	assertion, data, err := wa.BeginLogin(who, webauthn.WithUserVerification(protocol.VerificationRequired))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "Cannot start the passkey prompt.")
 		return

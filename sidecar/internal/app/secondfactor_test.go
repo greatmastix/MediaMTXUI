@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -581,5 +582,40 @@ func TestJoinResetEndsSessions(t *testing.T) {
 	h.cookie, h.csrf = old, ""
 	if rec := h.do("GET", "/api/v1/session", nil); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("the session from before the reset: %d", rec.Code)
+	}
+}
+
+// A passkey stands in for the password and the code, so its authenticator must verify the user (fingerprint, face,
+// PIN): an assertion without user verification is refused, for sign-in and for step-up.
+func TestPasskeyNeedsUserVerification(t *testing.T) {
+	h := newHarness(t, nil, fast)
+	h.completeSetup()
+	k := h.registerPasskey("Laptop")
+	lazy := *k
+	lazy.auth.Options.UserNotVerified = true
+	h.signOutLocally()
+	if code := h.assert(&lazy, k.rp, "/api/v1/auth/passkey/begin", "/api/v1/auth/passkey/finish"); code == http.StatusOK {
+		t.Fatal("signed in with a passkey that did not verify the user")
+	}
+	if code := h.assert(k, k.rp, "/api/v1/auth/passkey/begin", "/api/v1/auth/passkey/finish"); code != http.StatusOK {
+		t.Fatalf("a verified passkey: %d", code)
+	}
+	if code := h.assert(&lazy, k.rp, "/api/v1/auth/step-up/passkey/begin", "/api/v1/auth/step-up/passkey/finish"); code == http.StatusOK {
+		t.Fatal("stepped up with a passkey that did not verify the user")
+	}
+}
+
+// The passkey cap holds when a passkey is stored, not only when its prompt starts.
+func TestPasskeyCapAtStore(t *testing.T) {
+	h := newHarness(t, nil, fast)
+	h.completeSetup()
+	id := h.me().ID
+	for i := range maxPasskeys {
+		if _, err := h.st.AddPasskey(context.Background(), store.Passkey{UserID: id, CredentialID: []byte{byte(i)}, Credential: "{}", Name: "k"}, maxPasskeys); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := h.st.AddPasskey(context.Background(), store.Passkey{UserID: id, CredentialID: []byte{99}, Credential: "{}", Name: "k"}, maxPasskeys); !errors.Is(err, store.ErrLimit) {
+		t.Fatalf("an eleventh passkey: %v", err)
 	}
 }

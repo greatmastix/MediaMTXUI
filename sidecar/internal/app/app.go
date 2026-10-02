@@ -142,7 +142,9 @@ func Run(ctx context.Context, l Listeners, public, internal http.Handler, log *s
 	entries := []entry{{newServer(l.Public, public, log), l.PublicTLS != nil}, {newServer(l.Internal, internal, log), false}}
 	if l.PublicTLS != nil {
 		entries[0].srv.TLSConfig = l.PublicTLS
-		entries = append(entries, entry{newServer(l.HTTP, l.HTTPHandler, log), false})
+		plain := newServer(l.HTTP, l.HTTPHandler, log)
+		plain.ReadTimeout, plain.WriteTimeout = 10*time.Second, 10*time.Second // challenges and redirects only
+		entries = append(entries, entry{plain, false})
 	}
 	servers := make([]*http.Server, len(entries))
 	for i, e := range entries {

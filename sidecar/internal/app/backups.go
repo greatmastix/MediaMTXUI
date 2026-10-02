@@ -522,6 +522,7 @@ func (s *Server) backupUpload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnsupportedMediaType, "invalid", "Send the backup as application/octet-stream.")
 		return
 	}
+	extendBodyDeadline(w, time.Hour)
 	root, err := s.backupsRoot()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "The backups directory cannot be read.")

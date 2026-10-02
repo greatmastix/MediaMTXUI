@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/netip"
 	"net/url"
@@ -284,7 +285,16 @@ func (p *parser) publicURL(name string) *url.URL {
 	case u.Path != "" && u.Path != "/", u.RawQuery != "", u.Fragment != "":
 		p.fail(name, "must not have a path, query or fragment (the UI is served at the root)")
 	default:
-		return &url.URL{Scheme: u.Scheme, Host: strings.ToLower(u.Host)}
+		// Browsers send Origin without the scheme's default port, so "https://host:443" must become "https://host"
+		// or the origin check would refuse every change.
+		host := strings.ToLower(u.Host)
+		if port := u.Port(); (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
+			host = strings.ToLower(u.Hostname())
+			if strings.Contains(host, ":") {
+				host = "[" + host + "]"
+			}
+		}
+		return &url.URL{Scheme: u.Scheme, Host: host}
 	}
 	return nil
 }
@@ -416,7 +426,7 @@ func (p *parser) duration(name string, lo, hi time.Duration) time.Duration {
 // gigabytes reads a size in GB (decimals allowed, so tests can use megabytes) as bytes.
 func (p *parser) gigabytes(name string) int64 {
 	f, err := strconv.ParseFloat(p.get(name), 64)
-	if err != nil || f < 0 || f > 1e6 {
+	if err != nil || math.IsNaN(f) || f < 0 || f > 1e6 {
 		p.fail(name, "must be a number of GB from 0 to 1000000")
 		return 0
 	}

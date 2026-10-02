@@ -52,6 +52,7 @@ func (r Rules) Check(content []byte) error {
 		errs = append(errs, errors.New("pprof must be off"))
 	}
 	errs = append(errs, listenerConflicts(conf)...)
+	errs = append(errs, internalOnPublished(conf)...)
 	errs = append(errs, pathRules(conf)...)
 	return errors.Join(errs...)
 }
@@ -235,4 +236,39 @@ var Locked = map[string]string{
 	"hlsEncryption":       "The sidecar talks to the HLS server over the stack network.",
 	"webrtcAddress":       "The sidecar's live view reaches MediaMTX's WebRTC signalling at this address.",
 	"webrtcEncryption":    "The sidecar talks to the WebRTC signalling over the stack network.",
+}
+
+// publishedPorts are the ports the compose files publish (the stream ports). MediaMTX's servers that must stay on the
+// stack network may not move onto them: with RTMP switched off, metrics on :1935 would be published to the internet.
+var publishedPorts = map[string]bool{"8554": true, "1935": true, "8890": true, "8189": true}
+
+// internalOnPublished refuses the API, metrics, pprof, playback, HLS and WebRTC signalling servers on a published port,
+// while they are on (a switched-off server's address opens nothing).
+func internalOnPublished(conf map[string]any) []error {
+	var errs []error
+	for _, srv := range []struct {
+		enable, key string
+		dflt        bool
+	}{
+		{"api", "apiAddress", false},
+		{"metrics", "metricsAddress", false},
+		{"pprof", "pprofAddress", false},
+		{"playback", "playbackAddress", false},
+		{"hls", "hlsAddress", true},
+		{"webrtc", "webrtcAddress", true},
+	} {
+		on, set := asBool(conf[srv.enable])
+		if !set {
+			on = srv.dflt
+		}
+		addr, ok := conf[srv.key].(string)
+		if !on || !ok {
+			continue
+		}
+		key := srv.key
+		if _, port, err := net.SplitHostPort(addr); err == nil && publishedPorts[port] {
+			errs = append(errs, fmt.Errorf("%s must not use port %s: it is published to the internet for streams", key, port))
+		}
+	}
+	return errs
 }

@@ -226,7 +226,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		ok = good && !user.Disabled
 		if ok && rehash {
 			if h, err := s.d.Hasher.Hash(ctx, body.Password); err == nil {
-				_ = s.d.Store.UpdatePasswordHash(ctx, user.ID, h)
+				_ = s.d.Store.RehashPassword(ctx, user.ID, user.PasswordHash, h)
 			}
 		}
 	}

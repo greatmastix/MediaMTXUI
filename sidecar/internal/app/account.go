@@ -375,6 +375,9 @@ func (s *Server) recoveryCodes(w http.ResponseWriter, r *http.Request) {
 
 // Passkeys.
 
+// maxPasskeys is how many passkeys one person may have; checked at the start and, atomically, when one is stored.
+const maxPasskeys = 10
+
 // passkeyRegisterBegin starts adding a passkey; it takes the password (see totpSetup: a passkey signs in and passes
 // step-up on its own).
 func (s *Server) passkeyRegisterBegin(w http.ResponseWriter, r *http.Request) {
@@ -396,16 +399,20 @@ func (s *Server) passkeyRegisterBegin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", "Cannot read your passkeys.")
 		return
 	}
-	if len(who.creds) >= 10 {
-		writeError(w, http.StatusConflict, "limit", "You have 10 passkeys; remove one first.")
+	if len(who.creds) >= maxPasskeys {
+		writeError(w, http.StatusConflict, "limit", fmt.Sprintf("You have %d passkeys; remove one first.", maxPasskeys))
 		return
 	}
 	exclude := make([]protocol.CredentialDescriptor, 0, len(who.creds))
 	for i := range who.creds {
 		exclude = append(exclude, who.creds[i].Descriptor())
 	}
-	creation, data, err := wa.BeginRegistration(who,
-		webauthn.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired), webauthn.WithExclusions(exclude))
+	required := true
+	creation, data, err := wa.BeginRegistration(who, webauthn.WithExclusions(exclude),
+		webauthn.WithAuthenticatorSelection(protocol.AuthenticatorSelection{
+			ResidentKey: protocol.ResidentKeyRequirementRequired, RequireResidentKey: &required,
+			UserVerification: protocol.VerificationRequired,
+		}))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "Cannot start the passkey setup.")
 		return
@@ -467,7 +474,12 @@ func (s *Server) passkeyRegisterFinish(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", "Cannot store the passkey.")
 		return
 	}
-	if _, err := s.d.Store.AddPasskey(ctx, store.Passkey{UserID: cur.user.ID, CredentialID: cred.ID, Credential: string(b), Name: name}); err != nil {
+	_, err = s.d.Store.AddPasskey(ctx, store.Passkey{UserID: cur.user.ID, CredentialID: cred.ID, Credential: string(b), Name: name}, maxPasskeys)
+	if errors.Is(err, store.ErrLimit) {
+		writeError(w, http.StatusConflict, "limit", fmt.Sprintf("You have %d passkeys; remove one first.", maxPasskeys))
+		return
+	}
+	if err != nil {
 		writeError(w, http.StatusConflict, "exists", "This passkey is already registered.")
 		return
 	}

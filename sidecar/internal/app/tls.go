@@ -62,8 +62,16 @@ func redirectToHTTPS(origin string) http.Handler {
 			http.Error(w, "Use HTTPS: "+origin, http.StatusBadRequest)
 			return
 		}
-		// Always onto origin: the request only adds a path, so this cannot lead elsewhere.
-		http.Redirect(w, r, origin+r.URL.RequestURI(), http.StatusMovedPermanently) //nolint:gosec // G710: see above
+		// Always onto origin, with the request's path and query only: an absolute or opaque request-target (which a
+		// client can send) contributes nothing, so this cannot lead elsewhere.
+		target := r.URL.EscapedPath()
+		switch {
+		case r.URL.Opaque != "" || r.URL.IsAbs() || !strings.HasPrefix(target, "/"):
+			target = "/"
+		case r.URL.RawQuery != "":
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, origin+target, http.StatusMovedPermanently) //nolint:gosec // G710: see above
 	})
 }
 
@@ -84,7 +92,16 @@ func WarmCertificate(ctx context.Context, tc *tls.Config, host string, log inter
 			return
 		case <-time.After(2 * time.Second):
 		}
-		if _, err := tc.GetCertificate(&tls.ClientHelloInfo{ServerName: host, SupportedProtos: []string{"h2", "http/1.1"}}); err != nil {
+		// A hello like a modern browser's: autocert then gets the ECDSA certificate browsers will ask for (an
+		// RSA-only hello would warm the wrong one, and the first visitor would wait for a second order).
+		hello := &tls.ClientHelloInfo{
+			ServerName: host, SupportedProtos: []string{"h2", "http/1.1"},
+			CipherSuites:      []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
+			SignatureSchemes:  []tls.SignatureScheme{tls.ECDSAWithP256AndSHA256},
+			SupportedCurves:   []tls.CurveID{tls.CurveP256},
+			SupportedVersions: []uint16{tls.VersionTLS13, tls.VersionTLS12},
+		}
+		if _, err := tc.GetCertificate(hello); err != nil {
 			log.Warn("no certificate yet; check that the domain points here and ports 80 or 443 are reachable", "host", host, "err", err)
 		}
 	}()
