@@ -34,6 +34,16 @@ describe('credentials', () => {
     ).toEqual(['c', 'z', 'a', 'b'])
   })
 
+  it('offers bearer tokens for what takes them: WHIP and WHEP, not HLS', async () => {
+    fakeSidecar({ session: adminSession })
+    renderApp('/credentials')
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'New credential' }))
+    const token = within(screen.getByLabelText('Kind')).getByRole('option', { name: /^Bearer/ })
+    expect(token).toHaveTextContent('WHIP and WHEP')
+    expect(token).not.toHaveTextContent('HLS')
+  })
+
   it('creates a credential and shows its secret once, with ready addresses', async () => {
     const { calls } = fakeSidecar({ session: adminSession })
     renderApp('/credentials')

@@ -50,7 +50,10 @@ export function SettingsForm({
     () => Object.fromEntries(settings.map((s) => [s.key, toText(s, current[s.key])])),
     [settings, current],
   )
-  const [texts, setTexts] = useState<Record<string, string>>(initial)
+  // Only what is typed here is kept; the other fields show the section as it is now, also when mediamtx.yml changes
+  // elsewhere meanwhile (another admin, a stream's owner, the sidecar itself), and a save sends only what differs.
+  const [edits, setEdits] = useState<Record<string, string>>({})
+  const texts = { ...initial, ...edits }
   const [filter, setFilter] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -80,6 +83,7 @@ export function SettingsForm({
     setSaving(true)
     try {
       await onSave({ set: pending.set, remove: pending.remove })
+      setEdits({})
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'The change could not be saved.')
     } finally {
@@ -126,7 +130,7 @@ export function SettingsForm({
                   changed={(texts[s.key] ?? '') !== initial[s.key]}
                   error={pending.errors[s.key]}
                   onChange={(v) => {
-                    setTexts((t) => ({ ...t, [s.key]: v }))
+                    setEdits((t) => ({ ...t, [s.key]: v }))
                   }}
                 />
               ))}
@@ -158,7 +162,7 @@ export function SettingsForm({
           <Button
             variant="outline"
             onClick={() => {
-              setTexts(initial)
+              setEdits({})
               setError(null)
             }}
             disabled={saving || dirty === 0}

@@ -17,6 +17,8 @@ export interface FakeSnapshot {
 export interface FakeState {
   setupRequired: boolean
   session: Session | null
+  /** Who signs in with the password. */
+  account: Session
   password: string
   status: Status
   /** mediamtx.yml as data; the fake renders it as JSON text for the raw editor. */
@@ -58,14 +60,19 @@ export const healthyStatus: Status = {
   warnings: [],
 }
 
-const json = (status: number, body: unknown) => Response.json(body, { status })
-const error = (status: number, kind: string, message: string) =>
+export const json = (status: number, body: unknown) => Response.json(body, { status })
+export const error = (status: number, kind: string, message: string) =>
   json(status, { error: kind, message })
 
-export function fakeSidecar(initial: Partial<FakeState> = {}) {
+/** A route: the request's JSON body, headers and path in, the answer out. */
+export type Route = (body: Record<string, unknown>, headers: Headers, path: string) => Response
+
+/** extra: more routes ("METHOD /path", or a prefix ending in /*), taking precedence over the built-in ones. */
+export function fakeSidecar(initial: Partial<FakeState> = {}, extra: Record<string, Route> = {}) {
   const state: FakeState = {
     setupRequired: false,
     session: null,
+    account: adminSession,
     password: 'correct horse battery',
     status: healthyStatus,
     settings: initialSettings(),
@@ -134,10 +141,7 @@ export function fakeSidecar(initial: Partial<FakeState> = {}) {
     for (const k of (body.remove ?? []) as string[]) Reflect.deleteProperty(target, k)
     return written(`${key ?? 'global settings'} changed`)
   }
-  const routes: Record<
-    string,
-    (body: Record<string, unknown>, headers: Headers, path: string) => Response
-  > = {
+  const routes: Record<string, Route> = {
     'GET /api/v1/health': () =>
       json(200, { status: 'ok', version: '0.1.0', mediamtxVersion: '1.21.1' }),
     'GET /api/v1/setup': () => json(200, { required: state.setupRequired }),
@@ -154,7 +158,7 @@ export function fakeSidecar(initial: Partial<FakeState> = {}) {
     'POST /api/v1/auth/login': (body) => {
       if (body.password !== state.password)
         return error(401, 'invalid_credentials', 'Wrong username or password.')
-      state.session = adminSession
+      state.session = state.account
       return json(200, state.session)
     },
     'GET /api/v1/session': () =>
@@ -221,7 +225,7 @@ export function fakeSidecar(initial: Partial<FakeState> = {}) {
     'DELETE /api/v1/config/paths/*': (_, __, path) => {
       const name = decodeURIComponent(path.replace('/api/v1/config/paths/', ''))
       const paths = section('paths')
-      if (!(name in paths))
+      if (!Object.hasOwn(paths, name))
         return error(404, 'not_found', 'There is no such entry in mediamtx.yml.')
       Reflect.deleteProperty(paths, name)
       return written(`path ${name} deleted`)
@@ -287,9 +291,10 @@ export function fakeSidecar(initial: Partial<FakeState> = {}) {
     const body: unknown = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
     calls.push({ method, path: url.pathname, headers, body })
     const key = `${method} ${url.pathname}`
-    const route =
-      routes[key] ??
-      Object.entries(routes).find(([k]) => k.endsWith('/*') && key.startsWith(k.slice(0, -1)))?.[1]
+    const find = (table: Record<string, Route>) =>
+      table[key] ??
+      Object.entries(table).find(([k]) => k.endsWith('/*') && key.startsWith(k.slice(0, -1)))?.[1]
+    const route = find(extra) ?? find(routes)
     return Promise.resolve(
       route
         ? route((body ?? {}) as Record<string, unknown>, headers, url.pathname)

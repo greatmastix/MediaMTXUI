@@ -27,7 +27,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { ApiError } from '@/api/client'
 import { dismissDrift } from '@/api/config'
-import { logout, sessionQuery, statusQuery, type Session } from '@/api/sidecar'
+import { changeSession, logout, sessionQuery, statusQuery, type Session } from '@/api/sidecar'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button, buttonVariants } from '@/components/ui/button'
 import {
@@ -99,10 +99,12 @@ export function AppShell() {
   const href = useRouterState({ select: (s) => s.location.href })
 
   // However the session ends (signed out elsewhere, expired, a 401 from any request), go to sign-in and come back
-  // here afterwards.
+  // here afterwards. What was loaded for this session goes once nothing shows it any more.
   const endSession = useCallback(() => {
     queryClient.setQueryData(sessionQuery.queryKey, null)
-    void navigate({ to: '/login', search: { redirect: href } })
+    void navigate({ to: '/login', search: { redirect: href } }).then(() => {
+      changeSession(queryClient, null)
+    })
   }, [queryClient, navigate, href])
   const checkSession = useCallback(() => {
     void queryClient.query({ ...sessionQuery, staleTime: 0 }).then(
@@ -334,6 +336,7 @@ function Account() {
       queryClient.setQueryData<Session | null>(sessionQuery.queryKey, null)
       queryClient.removeQueries({ queryKey: statusQuery.queryKey })
       await navigate({ to: '/login' })
+      changeSession(queryClient, null)
     },
   })
   const user = session?.user

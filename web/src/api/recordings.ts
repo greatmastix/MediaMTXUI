@@ -42,7 +42,13 @@ export const recordingsQuery = queryOptions({
     request(
       'GET',
       '/api/v1/recordings',
-      z.object({ disk: recordingsDiskSchema, paths: z.array(recordingPathSchema) }),
+      z.object({
+        disk: recordingsDiskSchema,
+        paths: z.array(recordingPathSchema),
+        /** The longest stretch one export (play or download) may cover (MTXUI_EXPORT_MAX_DURATION), when the server
+         * says. */
+        exportMaxSeconds: z.number().optional(),
+      }),
       undefined,
       signal,
     ),

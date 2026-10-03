@@ -17,13 +17,7 @@ export function YamlPage() {
   const note = useConfigNote()
   if (!config) return <Skeleton className="h-96 w-full" />
   return (
-    <YamlEditor
-      key={config.sha256}
-      content={config.content}
-      sha256={config.sha256}
-      refresh={refresh}
-      note={note}
-    />
+    <YamlEditor content={config.content} sha256={config.sha256} refresh={refresh} note={note} />
   )
 }
 
@@ -38,7 +32,18 @@ function YamlEditor({
   refresh: () => Promise<void>
   note: SavedNoteState['show']
 }) {
-  const [text, setText] = useState(content)
+  // The text being edited and the file it was made from. Unedited, the editor shows the file as it is now, also after
+  // it changed elsewhere; edited, it keeps the edits and saves against the file they were made from, so a change made
+  // meanwhile is reported (and refused on save), never discarded or overwritten unseen.
+  const [draft, setDraft] = useState<{
+    text: string
+    from: { content: string; sha256: string }
+  } | null>(null)
+  const text = draft?.text ?? content
+  const setText = (t: string) => {
+    const from = draft?.from ?? { content, sha256 }
+    setDraft(t === from.content ? null : { text: t, from })
+  }
   const [reason, setReason] = useState('')
   const [problem, setProblem] = useState<{
     title: string
@@ -47,7 +52,13 @@ function YamlEditor({
   } | null>(null)
   const [valid, setValid] = useState<boolean | null>(null)
   const [busy, setBusy] = useState(false)
-  const dirty = text !== content
+  const dirty = draft !== null
+  const meanwhile = !busy && draft !== null && draft.from.sha256 !== sha256
+  const reload = () => {
+    setDraft(null)
+    setProblem(null)
+    void refresh()
+  }
 
   const run = async (f: () => Promise<void>) => {
     setBusy(true)
@@ -81,17 +92,22 @@ function YamlEditor({
           <AlertDescription className="whitespace-pre-wrap">
             {problem.message}
             {problem.conflict && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-2"
-                onClick={() => {
-                  void refresh()
-                }}
-              >
+              <Button variant="outline" size="sm" className="mt-2" onClick={reload}>
                 Load the current file (your edits are discarded)
               </Button>
             )}
+          </AlertDescription>
+        </Alert>
+      )}
+      {meanwhile && !problem?.conflict && (
+        <Alert role="status" data-testid="yaml-changed-meanwhile">
+          <AlertTitle>Changed meanwhile</AlertTitle>
+          <AlertDescription>
+            mediamtx.yml was changed elsewhere after you started editing, so saving these edits is
+            refused. Copy what you need, then load the current file.
+            <Button variant="outline" size="sm" className="mt-2" onClick={reload}>
+              Load the current file (your edits are discarded)
+            </Button>
           </AlertDescription>
         </Alert>
       )}
@@ -138,7 +154,7 @@ function YamlEditor({
           variant="outline"
           disabled={busy || !dirty}
           onClick={() => {
-            setText(content)
+            setDraft(null)
             setProblem(null)
           }}
         >
@@ -148,9 +164,10 @@ function YamlEditor({
           disabled={busy || !dirty}
           onClick={() => {
             void run(async () => {
-              const res = await replaceConfig(text, sha256, reason)
+              const res = await replaceConfig(text, draft?.from.sha256 ?? sha256, reason)
               note(describeWrite(res))
               await refresh()
+              setDraft(null)
             })
           }}
         >

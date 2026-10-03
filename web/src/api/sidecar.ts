@@ -1,4 +1,4 @@
-import { queryOptions } from '@tanstack/react-query'
+import { queryOptions, type QueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 
 import { ApiError, request, requestNoContent, setCsrfToken } from './client'
@@ -137,6 +137,17 @@ export const sessionQuery = queryOptions({
   queryKey: ['session'],
   queryFn: ({ signal }) => fetchSession(signal),
 })
+
+/**
+ * Sets who is signed in now (null: nobody) and drops every other cached answer, all of them the last person's: a
+ * query keeps its data through a failed refetch, so whoever signs in next in this tab would see them (the people, their
+ * sessions, the config) until their own answers arrive, or for good where they are refused. Whether setup is done
+ * stays. Call it where nothing signed in is on screen any more: on the sign-in pages, or after leaving for them.
+ */
+export function changeSession(queryClient: QueryClient, session: Session | null) {
+  queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== setupQuery.queryKey[0] })
+  queryClient.setQueryData(sessionQuery.queryKey, session)
+}
 
 export const statusQuery = queryOptions({
   queryKey: ['status'],

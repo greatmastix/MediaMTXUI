@@ -142,9 +142,15 @@ export function PathsConfigPage() {
   )
 }
 
-/** Hides a password in a source URL for the list; the editor shows it. */
+/**
+ * Hides what a source URL carries as a secret, for the list: a password (user:pass@), a stream key (rtmp://…#key) and
+ * query values (an SRT stream id or passphrase, a token). The editor shows them.
+ */
 function redact(source: string) {
-  return source.replace(/^([a-z0-9+.-]+:\/\/[^:/@]+:)[^@/]*@/i, '$1•••@')
+  return source
+    .replace(/^([a-z0-9+.-]+:\/\/[^:/@]+:)[^@/]*@/i, '$1•••@')
+    .replace(/#.+$/, '#•••')
+    .replace(/([?&][^=&#]*=)[^&#]+/g, '$1•••')
 }
 
 const keywordSources = [
@@ -171,11 +177,11 @@ const urlExamples = [
 
 /** Creates or edits one path: its name, its source and every other path setting. */
 export function PathEditorPage({ name: existing }: { name?: string }) {
-  const { config, catalog, paths, pathDefaults, pathValues, refresh } = useConfig()
+  const { config, catalog, hasPath, pathDefaults, pathValues, latestPath, refresh } = useConfig()
   const navigate = useNavigate()
   const note = useConfigNote()
   if (!config || !catalog) return <Skeleton className="h-64 w-full" />
-  if (existing !== undefined && !(existing in paths)) {
+  if (existing !== undefined && !hasPath(existing)) {
     return (
       <div className="space-y-2">
         <p className="text-sm text-muted-foreground" data-testid="config-path-missing">
@@ -190,12 +196,12 @@ export function PathEditorPage({ name: existing }: { name?: string }) {
   const current = existing === undefined ? {} : pathValues(existing)
   return (
     <PathForm
-      key={`${existing ?? 'new'}-${config.sha256}`}
+      key={existing ?? 'new'}
       existing={existing}
       current={current}
       catalog={catalog.path}
       pathDefaults={pathDefaults}
-      taken={(n) => n in paths}
+      latest={latestPath}
       onSaved={async (name, message) => {
         note(message)
         await refresh()
@@ -206,34 +212,36 @@ export function PathEditorPage({ name: existing }: { name?: string }) {
   )
 }
 
+/** What the source field shows for a source: the default, a keyword, or a URL. */
+const kindOf = (source: string) =>
+  source === '' ? '' : keywordSources.some((k) => k.value === source) ? source : 'url'
+
 function PathForm({
   existing,
   current,
   catalog,
   pathDefaults,
-  taken,
+  latest,
   onSaved,
 }: {
   existing?: string
   current: Values
   catalog: Parameters<typeof SettingsForm>[0]['settings']
   pathDefaults: Values
-  taken: (name: string) => boolean
+  /** The path as mediamtx.yml has it now (undefined: no such path). */
+  latest: (name: string) => Promise<Values | undefined>
   onSaved: (name: string, note: ReturnType<typeof describeWrite>) => Promise<void>
 }) {
   const live = useLive()
   const [name, setName] = useState(existing ?? '')
+  // Like the other settings, the source follows the path as it is now until it is changed here.
   const initialSource = str(current.source) ?? ''
-  const [source, setSource] = useState(initialSource)
+  const [sourceEdit, setSourceEdit] = useState<{ kind: string; source: string } | null>(null)
+  const source = sourceEdit?.source ?? initialSource
+  const kind = sourceEdit?.kind ?? kindOf(initialSource)
+  const sourceChanged = source !== initialSource
   const inheritedSource = str(pathDefaults.source) ?? 'publisher'
-  const [kind, setKind] = useState<string>(
-    initialSource === ''
-      ? ''
-      : keywordSources.some((k) => k.value === initialSource)
-        ? initialSource
-        : 'url',
-  )
-  const extraDirty = (existing === undefined ? 1 : 0) + (source !== initialSource ? 1 : 0)
+  const extraDirty = (existing === undefined ? 1 : 0) + (sourceChanged ? 1 : 0)
 
   return (
     <div className="space-y-4">
@@ -256,16 +264,26 @@ function PathForm({
             throw new ApiError(400, 'invalid', 'Enter the address to pull the stream from.')
           }
           if (!target) throw new ApiError(400, 'invalid', 'Give the path a name.')
-          if (existing === undefined && taken(target)) {
+          // A path is written whole, so only what was changed here goes onto the path as mediamtx.yml has it now: a
+          // change made meanwhile elsewhere (a stream's forwarding or recording, the recordings guard, the holding
+          // screen) stays instead of coming back from the copy this page loaded.
+          const now = await latest(target)
+          if (existing === undefined && now !== undefined) {
             throw new ApiError(400, 'invalid', `There is already a path ${target}.`)
           }
-          const dropped = new Set([...remove, 'source'])
+          if (existing !== undefined && now === undefined) {
+            throw new ApiError(409, 'conflict', `The path ${target} was removed meanwhile.`)
+          }
           const next: Values = Object.fromEntries(
-            Object.entries({ ...current, ...set }).filter(([k]) => !dropped.has(k)),
+            Object.entries({ ...now, ...set }).filter(([k]) => !remove.includes(k)),
           )
-          if (source !== '') next.source = source
+          if (sourceChanged) {
+            if (source === '') Reflect.deleteProperty(next, 'source')
+            else next.source = source
+          }
           const res = await savePath(target, next)
           await onSaved(target, describeWrite(res))
+          setSourceEdit(null)
         }}
       >
         <fieldset className="space-y-4 rounded-xl border bg-card p-4">
@@ -303,8 +321,10 @@ function PathForm({
                 value={kind}
                 onChange={(e) => {
                   const v = e.target.value
-                  setKind(v)
-                  setSource(v === 'url' ? (kind === 'url' ? source : 'rtsp://') : v)
+                  setSourceEdit({
+                    kind: v,
+                    source: v === 'url' ? (kind === 'url' ? source : 'rtsp://') : v,
+                  })
                 }}
               >
                 <option value="">Default ({inheritedSource})</option>
@@ -322,7 +342,7 @@ function PathForm({
                   spellCheck={false}
                   value={source}
                   onChange={(e) => {
-                    setSource(e.target.value)
+                    setSourceEdit({ kind, source: e.target.value })
                   }}
                 />
               )}

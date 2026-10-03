@@ -1,7 +1,7 @@
 import { queryOptions } from '@tanstack/react-query'
 import { z } from 'zod'
 
-import { request, requestNoContent } from './client'
+import { ApiError, request, requestNoContent } from './client'
 
 // The sidecar's config API (admin only). Every write is validated by the sidecar's rules and MediaMTX's own parser,
 // written atomically and recorded as a snapshot; structured edits leave the rest of mediamtx.yml byte for byte.
@@ -72,14 +72,30 @@ export const replaceConfig = (content: string, sha256: string, reason?: string) 
 export const restoreSnapshot = (id: number) =>
   request('POST', `/api/v1/config/snapshots/${id}/restore`, writeResultSchema)
 
-/** A path name in a URL: its slashes stay path separators, everything else is escaped. */
-export const pathURL = (name: string) =>
-  `/api/v1/config/paths/${name.split('/').map(encodeURIComponent).join('/')}`
+/**
+ * A path name in a URL: its slashes stay path separators, everything else is escaped. A "." or ".." between slashes
+ * (possible only in a regular expression's name) stays as it is, and URL parsing removes it, so the request would name
+ * another path, perhaps one that exists: such a name is refused here, and changed in the YAML editor instead.
+ */
+export function pathURL(name: string) {
+  const parts = name.split('/')
+  if (parts.some((p) => p === '.' || p === '..')) {
+    throw new ApiError(
+      400,
+      'invalid',
+      `${name} has a "." or ".." between slashes, which an address cannot carry; change this path in the YAML editor.`,
+    )
+  }
+  return `/api/v1/config/paths/${parts.map(encodeURIComponent).join('/')}`
+}
 
-export const savePath = (name: string, config: Record<string, unknown>, reason?: string) =>
-  request('PUT', pathURL(name), writeResultSchema, { config, reason })
+export async function savePath(name: string, config: Record<string, unknown>, reason?: string) {
+  return request('PUT', pathURL(name), writeResultSchema, { config, reason })
+}
 
-export const deletePath = (name: string) => request('DELETE', pathURL(name), writeResultSchema)
+export async function deletePath(name: string) {
+  return request('DELETE', pathURL(name), writeResultSchema)
+}
 
 export interface SettingsPatch {
   set: Record<string, unknown>

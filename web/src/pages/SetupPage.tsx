@@ -4,7 +4,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { Controller, useForm } from 'react-hook-form'
 import { z } from 'zod'
 
-import { completeSetup, sessionQuery, setupQuery } from '@/api/sidecar'
+import { changeSession, completeSetup, setupQuery } from '@/api/sidecar'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -61,8 +61,8 @@ export function SetupPage() {
         ingest: { rtsp: v.rtsp, rtmp: v.rtmp, srt: v.srt },
       }),
     onSuccess: async (session) => {
+      changeSession(queryClient, session)
       queryClient.setQueryData(setupQuery.queryKey, { required: false })
-      queryClient.setQueryData(sessionQuery.queryKey, session)
       await navigate({ to: '/' })
     },
   })

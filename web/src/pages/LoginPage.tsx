@@ -7,10 +7,10 @@ import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 
 import {
+  changeSession,
   login,
   loginCode,
   loginPasskey,
-  sessionQuery,
   setupQuery,
   type Session,
 } from '@/api/sidecar'
@@ -41,7 +41,7 @@ export function LoginPage({ redirectTo = '/' }: { redirectTo?: string }) {
     defaultValues: { username: '', password: '' },
   })
   const done = async (session: Session) => {
-    queryClient.setQueryData(sessionQuery.queryKey, session)
+    changeSession(queryClient, session)
     await navigate({ href: redirectTo })
   }
   const signIn = useMutation({

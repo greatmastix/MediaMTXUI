@@ -3,7 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { ChevronLeft, ChevronRight, Download, Play, Trash2 } from 'lucide-react'
 import { useRef, useState } from 'react'
 
-import { ApiError } from '@/api/client'
+import { ApiError, refusal } from '@/api/client'
 import {
   deleteSegments,
   exportURL,
@@ -59,7 +59,9 @@ export function RecordingPage({ name }: { name: string }) {
   const queryClient = useQueryClient()
   const { data: session } = useQuery(sessionQuery)
   const operator = atLeast(session?.user.role ?? 'viewer', 'operator')
-  const info = useQuery(recordingsQuery).data?.paths.find((p) => p.name === name)
+  const recordings = useQuery(recordingsQuery).data
+  const info = recordings?.paths.find((p) => p.name === name)
+  const maxSeconds = recordings?.exportMaxSeconds
   const latest = info ? new Date(info.last) : null
   const now = useNow(60_000)
 
@@ -75,6 +77,8 @@ export function RecordingPage({ name }: { name: string }) {
   const segments = useQuery(segmentsQuery(name))
   const [sel, setSel] = useState<Selection | null>(null)
   const [playing, setPlaying] = useState<string | null>(null)
+  // Why the player shows nothing: a <video> only says that it failed, so the server is asked for its reason.
+  const [playError, setPlayError] = useState<{ url: string; message: string } | null>(null)
   const [confirm, setConfirm] = useState(false)
 
   const svg = useRef<SVGSVGElement>(null)
@@ -91,6 +95,8 @@ export function RecordingPage({ name }: { name: string }) {
     return { ...sp, s, e: s + sp.duration * 1000 }
   })
   const selSeconds = sel ? (sel.end.getTime() - sel.start.getTime()) / 1000 : 0
+  // The server exports at most so much at a time (MTXUI_EXPORT_MAX_DURATION); longer is refused, not shortened.
+  const tooLong = maxSeconds !== undefined && selSeconds > maxSeconds
   const inSel = sel
     ? (segments.data ?? []).filter((g) => {
         const t = Date.parse(g.start)
@@ -335,22 +341,35 @@ export function RecordingPage({ name }: { name: string }) {
               {inSel.length > 0 &&
                 ` · ${String(inSel.length)} segment${inSel.length === 1 ? '' : 's'} start in it`}
             </p>
+            {tooLong && (
+              <p className="text-sm text-muted-foreground" data-testid="export-too-long">
+                Play and download take at most {formatDuration(maxSeconds)} at a time: select less,
+                or download it in parts.
+              </p>
+            )}
             <div className="flex flex-wrap gap-2">
               <Button
                 size="sm"
+                disabled={tooLong}
                 onClick={() => {
                   setPlaying(exportURL(name, sel.start, selSeconds, 'fmp4'))
                 }}
               >
                 <Play /> Play
               </Button>
-              <a
-                className={buttonVariants({ size: 'sm', variant: 'outline' })}
-                href={exportURL(name, sel.start, selSeconds, 'mp4')}
-                download
-              >
-                <Download /> Download MP4
-              </a>
+              {tooLong ? (
+                <Button size="sm" variant="outline" disabled>
+                  <Download /> Download MP4
+                </Button>
+              ) : (
+                <a
+                  className={buttonVariants({ size: 'sm', variant: 'outline' })}
+                  href={exportURL(name, sel.start, selSeconds, 'mp4')}
+                  download
+                >
+                  <Download /> Download MP4
+                </a>
+              )}
               {operator && inSel.length > 0 && !confirm && (
                 <Button
                   size="sm"
@@ -417,7 +436,28 @@ export function RecordingPage({ name }: { name: string }) {
                 muted
                 className="aspect-video w-full max-w-2xl rounded-lg bg-black"
                 data-testid="recording-player"
+                onError={() => {
+                  const url = playing
+                  void refusal(url).then(
+                    (e) => {
+                      setPlayError({
+                        url,
+                        message: e
+                          ? e.message
+                          : 'This browser cannot play this stretch; download it instead.',
+                      })
+                    },
+                    () => {
+                      setPlayError({ url, message: 'The recording could not be loaded.' })
+                    },
+                  )
+                }}
               />
+            )}
+            {playing && playError?.url === playing && (
+              <p role="alert" className="text-sm text-destructive" data-testid="recording-error">
+                {playError.message}
+              </p>
             )}
           </>
         )}

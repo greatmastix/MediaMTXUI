@@ -15,7 +15,6 @@ export function GlobalSettingsPage() {
   return (
     <>
       <SettingsForm
-        key={config.sha256}
         idPrefix="global"
         settings={catalog.global}
         current={global}
@@ -42,7 +41,6 @@ export function PathDefaultsPage() {
         What every path gets unless it sets a value of its own.
       </p>
       <SettingsForm
-        key={config.sha256}
         idPrefix="defaults"
         settings={catalog.path}
         current={pathDefaults}

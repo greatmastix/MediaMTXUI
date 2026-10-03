@@ -375,31 +375,47 @@ function Activity({
   )
 }
 
+/** What the settings form has changed, field by field. */
+interface Edits {
+  title?: string
+  cap?: string
+  public?: boolean
+  record?: boolean
+  owner?: string
+}
+
 function Settings({ stream: s, online }: { stream: Stream; online: boolean }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const people = useQuery({ ...peopleQuery, enabled: s.canAdmin })
-  const [title, setTitle] = useState(s.title)
-  const [cap, setCap] = useState(String(s.maxReaders))
-  const [isPublic, setPublic] = useState(s.public)
-  const [record, setRecord] = useState(s.record)
-  const [owner, setOwner] = useState(s.owner ? String(s.owner.id) : '0')
-  const [confirmDelete, setConfirmDelete] = useState(false)
-  // Just the list and this stream (exact keys: not its lease and history below them), without waiting for them.
-  const refresh = () => {
-    void queryClient.invalidateQueries({ queryKey: streamsQuery.queryKey, exact: true })
-    void queryClient.invalidateQueries({ queryKey: streamQuery(s.id).queryKey, exact: true })
+  // Only the fields changed here are kept; the others show the stream as it is now, so what changes meanwhile
+  // elsewhere (another manager makes it private or gives it to someone else, the recordings guard stops its recording)
+  // shows, and a save sends only what differs from it, never a value this page saw when it opened.
+  const [edits, setEdits] = useState<Edits>({})
+  const edit = (e: Edits) => {
+    setEdits({ ...edits, ...e })
   }
+  const title = edits.title ?? s.title
+  const cap = edits.cap ?? String(s.maxReaders)
+  const isPublic = edits.public ?? s.public
+  const record = edits.record ?? s.record
+  const owner = edits.owner ?? String(s.owner?.id ?? 0)
+  const patch: Parameters<typeof updateStream>[1] = {
+    ...(title !== s.title ? { title } : {}),
+    ...((Number(cap) || 0) !== s.maxReaders ? { maxReaders: Number(cap) || 0 } : {}),
+    ...(isPublic !== s.public ? { public: isPublic } : {}),
+    ...(record !== s.record ? { record } : {}),
+    ...(s.canAdmin && Number(owner) !== (s.owner?.id ?? 0) ? { ownerId: Number(owner) } : {}),
+  }
+  const changed = Object.keys(patch).length > 0
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const save = useMutation({
-    mutationFn: () =>
-      updateStream(s.id, {
-        title,
-        public: isPublic,
-        record,
-        maxReaders: Number(cap) || 0,
-        ...(s.canAdmin ? { ownerId: Number(owner) } : {}),
-      }),
-    onSuccess: refresh,
+    mutationFn: (p: typeof patch) => updateStream(s.id, p),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(streamQuery(s.id).queryKey, updated)
+      setEdits({})
+      void queryClient.invalidateQueries({ queryKey: streamsQuery.queryKey, exact: true })
+    },
   })
   const disconnect = useMutation({ mutationFn: () => disconnectStream(s.id) })
   const remove = useMutation({
@@ -420,7 +436,7 @@ function Settings({ stream: s, online }: { stream: Stream; online: boolean }) {
         className="grid gap-3 sm:grid-cols-3"
         onSubmit={(e) => {
           e.preventDefault()
-          save.mutate()
+          save.mutate(patch)
         }}
       >
         <label className="space-y-1 text-sm">
@@ -429,7 +445,7 @@ function Settings({ stream: s, online }: { stream: Stream; online: boolean }) {
             className={fieldClass}
             value={title}
             onChange={(e) => {
-              setTitle(e.target.value)
+              edit({ title: e.target.value })
             }}
           />
         </label>
@@ -441,7 +457,7 @@ function Settings({ stream: s, online }: { stream: Stream; online: boolean }) {
             min={0}
             value={cap}
             onChange={(e) => {
-              setCap(e.target.value)
+              edit({ cap: e.target.value })
             }}
           />
           <span className="block text-xs text-muted-foreground">0 means no limit.</span>
@@ -452,7 +468,7 @@ function Settings({ stream: s, online }: { stream: Stream; online: boolean }) {
             className="mt-1"
             checked={isPublic}
             onChange={(e) => {
-              setPublic(e.target.checked)
+              edit({ public: e.target.checked })
             }}
           />
           <span>
@@ -469,7 +485,7 @@ function Settings({ stream: s, online }: { stream: Stream; online: boolean }) {
             className="mt-1"
             checked={record}
             onChange={(e) => {
-              setRecord(e.target.checked)
+              edit({ record: e.target.checked })
             }}
           />
           <span>
@@ -487,7 +503,7 @@ function Settings({ stream: s, online }: { stream: Stream; online: boolean }) {
               className={fieldClass}
               value={owner}
               onChange={(e) => {
-                setOwner(e.target.value)
+                edit({ owner: e.target.value })
               }}
             >
               <option value="0">Nobody</option>
@@ -500,7 +516,7 @@ function Settings({ stream: s, online }: { stream: Stream; online: boolean }) {
           </label>
         )}
         <div className="flex flex-wrap gap-2 sm:col-span-3">
-          <Button type="submit" disabled={save.isPending}>
+          <Button type="submit" disabled={save.isPending || !changed}>
             Save
           </Button>
           {online && (

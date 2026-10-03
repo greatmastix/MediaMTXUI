@@ -34,6 +34,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { formatTime } from '@/lib/format'
+import { atLeast } from '@/lib/roles'
 
 // People (admins): who can sign in, and invitations. An invited person gets a one-time join code from you and sets
 // their own password at /join; the code works for 72 hours.
@@ -50,9 +51,19 @@ function errorText(e: unknown, fallback: string) {
 }
 
 export function PeoplePage() {
-  const people = useQuery(peopleQuery)
+  const { data: session } = useQuery(sessionQuery)
+  const admin = atLeast(session?.user.role ?? 'viewer', 'admin')
+  const people = useQuery({ ...peopleQuery, enabled: admin })
   const [inviting, setInviting] = useState(false)
   const [code, setCode] = useState<Invitation | null>(null)
+  if (!admin) {
+    return (
+      <div className="space-y-2">
+        <h1 className="font-heading text-2xl font-semibold">People</h1>
+        <p className="text-sm text-muted-foreground">People are managed by admins.</p>
+      </div>
+    )
+  }
   return (
     <div className="max-w-5xl space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -206,6 +217,12 @@ function JoinCodePanel({
         They open <span className="font-mono">{joinURL}</span>, enter the code and choose a
         password. Send the code another way than the address if you can (a chat and a call, say).
       </p>
+      {!inv.user.pending && (
+        <p className="text-sm" data-testid="reset-code-note">
+          Until then the code signs in as {inv.user.username} for whoever has it, and this page does
+          not show it again. If it may have gone astray, make another one: that ends this one.
+        </p>
+      )}
       <Button variant="outline" onClick={onClose}>
         Done
       </Button>
@@ -217,9 +234,17 @@ function PeopleTable({ people, onCode }: { people: Person[]; onCode: (inv: Invit
   const queryClient = useQueryClient()
   const { data: session } = useQuery(sessionQuery)
   const [confirm, setConfirm] = useState<number | null>(null)
+  // A reset code signs in as that person, so it is asked for once more, with what it does.
+  const [confirmReset, setConfirmReset] = useState<number | null>(null)
   const [editing, setEditing] = useState<number | null>(null)
   const refresh = () => queryClient.invalidateQueries({ queryKey: peopleQuery.queryKey })
-  const code = useMutation({ mutationFn: newJoinCode, onSuccess: onCode })
+  const code = useMutation({
+    mutationFn: newJoinCode,
+    onSuccess: (inv) => {
+      setConfirmReset(null)
+      onCode(inv)
+    },
+  })
   const remove = useMutation({
     mutationFn: deletePerson,
     onSuccess: async () => {
@@ -308,15 +333,49 @@ function PeopleTable({ people, onCode }: { people: Person[]; onCode: (inv: Invit
                     >
                       Edit
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        code.mutate(p.id)
-                      }}
-                    >
-                      {p.pending ? 'New join code' : 'Reset password'}
-                    </Button>
+                    {p.pending ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          code.mutate(p.id)
+                        }}
+                      >
+                        New join code
+                      </Button>
+                    ) : confirmReset === p.id ? (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          disabled={code.isPending}
+                          onClick={() => {
+                            code.mutate(p.id)
+                          }}
+                        >
+                          Make a reset code for {p.username}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setConfirmReset(null)
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setConfirmReset(p.id)
+                        }}
+                      >
+                        Reset password
+                      </Button>
+                    )}
                     {p.id !== session?.user.id &&
                       (confirm === p.id ? (
                         <>
@@ -352,6 +411,18 @@ function PeopleTable({ people, onCode }: { people: Person[]; onCode: (inv: Invit
                       ))}
                   </TableCell>
                 </TableRow>
+                {confirmReset === p.id && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="whitespace-normal">
+                      <p role="note" className="text-sm">
+                        A reset code lets whoever has it choose a new password and sign in as{' '}
+                        {p.username} straight away, without their authenticator app or passkey,
+                        until it is used or expires. {p.username}&apos;s sessions end when it is
+                        used. A new code replaces any earlier one.
+                      </p>
+                    </TableCell>
+                  </TableRow>
+                )}
                 {editing === p.id && (
                   <TableRow>
                     <TableCell colSpan={5}>

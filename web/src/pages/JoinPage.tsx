@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 
-import { join, sessionQuery } from '@/api/sidecar'
+import { changeSession, join } from '@/api/sidecar'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -22,7 +22,7 @@ export function JoinPage() {
   const submit = useMutation({
     mutationFn: join,
     onSuccess: async (session) => {
-      queryClient.setQueryData(sessionQuery.queryKey, session)
+      changeSession(queryClient, session)
       await navigate({ to: '/' })
     },
   })

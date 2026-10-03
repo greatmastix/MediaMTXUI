@@ -6,7 +6,8 @@ import { Player } from '@/components/Player'
 import { StatusPill } from '@/components/StatusPill'
 
 // A public stream's watch link: anyone can open it, no account. It plays over WebRTC (falling back to HLS) through
-// the public endpoints, which serve public streams only; a private or unknown stream looks the same as none.
+// the public endpoints, which serve public streams only; a private or unknown stream looks the same as none. The
+// heading is the stream's title from the server, never the address: anyone can make a link with any text in it.
 
 export function PublicWatchPage({ name }: { name: string }) {
   const q = useQuery(publicStreamQuery(name))
@@ -17,7 +18,7 @@ export function PublicWatchPage({ name }: { name: string }) {
         <span className="grid size-8 shrink-0 place-items-center rounded-[9px] bg-signal/15">
           <Radio className="size-[18px] text-signal" aria-hidden />
         </span>
-        <h1 className="font-heading text-2xl font-semibold">{s?.title ?? name}</h1>
+        <h1 className="font-heading text-2xl font-semibold">{s?.title ?? 'Watch'}</h1>
         {s &&
           (s.live ? (
             <StatusPill tone="good" data-testid="public-state" data-state="live">

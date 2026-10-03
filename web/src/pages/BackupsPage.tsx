@@ -311,7 +311,14 @@ function BackupList({ data }: { data: Backups }) {
   const make = useMutation({ mutationFn: createBackup, onSuccess: refresh })
   const remove = useMutation({ mutationFn: deleteBackup, onSuccess: refresh })
   const upload = useMutation({
-    mutationFn: uploadBackup,
+    mutationFn: (f: File) => {
+      if (f.size > data.maxUploadBytes) {
+        throw new Error(
+          `${f.name} is ${formatBytes(f.size)}; this server takes backup files up to ${formatBytes(data.maxUploadBytes)} (MTXUI_BACKUP_MAX_UPLOAD_MB).`,
+        )
+      }
+      return uploadBackup(f)
+    },
     onSuccess: async (b) => {
       await refresh()
       setChecking(b.name)
@@ -337,12 +344,7 @@ function BackupList({ data }: { data: Backups }) {
             onChange={(e) => {
               const f = e.target.files?.[0]
               e.target.value = ''
-              if (!f) return
-              if (f.size > data.maxUploadBytes) {
-                upload.reset()
-                return
-              }
-              upload.mutate(f)
+              if (f) upload.mutate(f)
             }}
           />
         </label>

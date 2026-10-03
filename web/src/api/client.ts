@@ -92,3 +92,20 @@ export async function request<T>(
 export async function requestNoContent(method: string, path: string, body?: unknown) {
   await send(method, path, body)
 }
+
+/**
+ * Why the server refuses a GET of path (null: it does not), without reading an answer it accepts: for an address a
+ * <video> or a link uses, which shows nothing of the server's message.
+ */
+export async function refusal(path: string): Promise<ApiError | null> {
+  const ctl = new AbortController()
+  try {
+    await sendOnce('GET', path, undefined, ctl.signal)
+    return null
+  } catch (e) {
+    if (e instanceof ApiError) return e
+    throw e
+  } finally {
+    ctl.abort()
+  }
+}

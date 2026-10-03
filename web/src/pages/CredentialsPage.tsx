@@ -190,7 +190,7 @@ function CreateForm({
           }}
         >
           <option value="password">Name and secret (RTSP, RTMP, SRT and most clients)</option>
-          <option value="token">Bearer token (HTTP clients: HLS, WebRTC, scripts)</option>
+          <option value="token">Bearer token (WebRTC clients: WHIP and WHEP, such as OBS)</option>
         </select>
       </Labeled>
       <fieldset className="space-y-2">

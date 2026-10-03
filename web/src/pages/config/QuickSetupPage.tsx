@@ -55,7 +55,8 @@ interface TaskProps {
   host: string
   global: Values
   paths: Values
-  pathValues: (name: string) => Values
+  /** The path as mediamtx.yml has it now (undefined: no such path). */
+  latestPath: (name: string) => Promise<Values | undefined>
   onDone: (d: Done) => void
 }
 
@@ -109,7 +110,7 @@ const tasks: Task[] = [
 ]
 
 export function QuickSetupPage() {
-  const { config, global, paths, pathValues, refresh } = useConfig()
+  const { config, global, paths, latestPath, refresh } = useConfig()
   const [task, setTask] = useState<Task | null>(null)
   const [done, setDone] = useState<Done | null>(null)
   if (!config) return <Skeleton className="h-64 w-full" />
@@ -117,7 +118,7 @@ export function QuickSetupPage() {
     host: config.publicHost,
     global,
     paths,
-    pathValues,
+    latestPath,
     onDone: (d) => {
       setDone(d)
       setTask(null)
@@ -351,15 +352,44 @@ function nameProblem(name: string, paths: Values): string | null {
   if (!/^[A-Za-z0-9_.~\-/]+$/.test(n) || n.startsWith('/') || n.endsWith('/')) {
     return 'Path names use letters, digits and _ . ~ - / (not at the start or end).'
   }
-  if (n in paths) return `There is already a path ${n}; change it under Paths.`
+  if (Object.hasOwn(paths, n)) return `There is already a path ${n}; change it under Paths.`
   return null
+}
+
+// A path is written whole, so the writes below start from the path as mediamtx.yml has it at that moment, never from
+// this page's copy: what changed meanwhile elsewhere (a stream's forwarding or recording, the recordings guard, the
+// holding screen) stays, and a path made meanwhile is not replaced.
+
+async function createPath(
+  latestPath: TaskProps['latestPath'],
+  name: string,
+  config: Values,
+  reason: string,
+) {
+  if ((await latestPath(name)) !== undefined) {
+    throw new ApiError(400, 'invalid', `There is already a path ${name}; change it under Paths.`)
+  }
+  return savePath(name, config, reason)
+}
+
+async function changePath(
+  latestPath: TaskProps['latestPath'],
+  name: string,
+  change: (now: Values) => Values,
+  reason: string,
+) {
+  const now = await latestPath(name)
+  if (now === undefined) {
+    throw new ApiError(409, 'conflict', `The path ${name} was removed meanwhile.`)
+  }
+  return savePath(name, change(now), reason)
 }
 
 const Frame = ({ children }: { children: ReactNode }) => (
   <div className="space-y-4 rounded-xl border bg-card p-4">{children}</div>
 )
 
-function RestreamForm({ host, global, paths, onDone }: TaskProps) {
+function RestreamForm({ host, global, paths, latestPath, onDone }: TaskProps) {
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
   const [onDemand, setOnDemand] = useState(true)
@@ -422,7 +452,12 @@ function RestreamForm({ host, global, paths, onDone }: TaskProps) {
           `Add path ${n}, pulled from ${url.trim()}${onDemand ? ' while someone watches' : ' all the time'}.`,
           ...(record ? [`Record ${n}.`] : []),
         ]}
-        steps={[{ label: 'path', run: () => savePath(n, config, `quick setup: re-stream ${n}`) }]}
+        steps={[
+          {
+            label: 'path',
+            run: () => createPath(latestPath, n, config, `quick setup: re-stream ${n}`),
+          },
+        ]}
         onDone={() => {
           onDone({
             title: `${n} is set up.`,
@@ -438,7 +473,7 @@ function RestreamForm({ host, global, paths, onDone }: TaskProps) {
 
 const publishProtocols = protocols.filter((p) => p.direct)
 
-function PublishForm({ host, global, paths, onDone }: TaskProps) {
+function PublishForm({ host, global, paths, latestPath, onDone }: TaskProps) {
   const [name, setName] = useState('')
   const [proto, setProto] = useState<Protocol['key']>('rtmp')
   const [record, setRecord] = useState(false)
@@ -505,7 +540,8 @@ function PublishForm({ host, global, paths, onDone }: TaskProps) {
           {
             label: 'path',
             run: () =>
-              savePath(
+              createPath(
+                latestPath,
                 n,
                 { source: 'publisher', ...(record ? { record: true } : {}) },
                 `quick setup: publish to ${n}`,
@@ -566,11 +602,9 @@ function PathSelect({
   )
 }
 
-function ForwardForm({ paths, pathValues, onDone }: TaskProps) {
+function ForwardForm({ paths, latestPath, onDone }: TaskProps) {
   const [path, setPath] = useState('')
   const [dest, setDest] = useState('')
-  const current = path ? pathValues(path) : {}
-  const forwards = Array.isArray(current.forward) ? (current.forward as unknown[]) : []
   const problem = !path
     ? 'Choose the path to forward.'
     : /^(rtsps?|rtmps?|srt|moqt|whips?):\/\/./i.test(dest.trim())
@@ -606,9 +640,16 @@ function ForwardForm({ paths, pathValues, onDone }: TaskProps) {
           {
             label: 'forward',
             run: () =>
-              savePath(
+              changePath(
+                latestPath,
                 path,
-                { ...current, forward: [...forwards, { dest: dest.trim() }] },
+                (now) => ({
+                  ...now,
+                  forward: [
+                    ...(Array.isArray(now.forward) ? (now.forward as unknown[]) : []),
+                    { dest: dest.trim() },
+                  ],
+                }),
                 `quick setup: forward ${path}`,
               ),
           },
@@ -629,7 +670,7 @@ function ForwardForm({ paths, pathValues, onDone }: TaskProps) {
 
 const everyPath = '*every path*'
 
-function RecordForm({ paths, pathValues, onDone }: TaskProps) {
+function RecordForm({ paths, latestPath, onDone }: TaskProps) {
   const [path, setPath] = useState('')
   const [segment, setSegment] = useState('1h')
   const [keep, setKeep] = useState<string>('168h')
@@ -697,9 +738,10 @@ function RecordForm({ paths, pathValues, onDone }: TaskProps) {
             : {
                 label: 'path',
                 run: () =>
-                  savePath(
+                  changePath(
+                    latestPath,
                     path,
-                    { ...pathValues(path), ...settings },
+                    (now) => ({ ...now, ...settings }),
                     `quick setup: record ${path}`,
                   ),
               },

@@ -436,8 +436,8 @@ function NotInstalled({ global }: { global: Values }) {
           .join('\n')}
       </pre>
       <p className="text-muted-foreground">
-        The helper (mtx-portgate) and its setup are described in the project&apos;s
-        deploy/host/portgate/README.md.
+        The helper (mtx-portgate) and what it needs are described in the project&apos;s
+        docs/exposure-control.md; deploy/portgate/install.sh installs it.
       </p>
     </div>
   )
@@ -461,16 +461,35 @@ const ruleText: { key: keyof AutoRules; label: string; hint: string }[] = [
   },
 ]
 
+const sameRules = (a: AutoRules | undefined, b: AutoRules | undefined) =>
+  a?.publish === b?.publish && a?.remember === b?.remember && a?.viewers === b?.viewers
+
 /** The automatic rules, each switchable, and what they have opened right now. */
 function AutomaticRules({ view }: { view: Exposure }) {
   const queryClient = useQueryClient()
-  // The last choice here wins over the streamed state until the server has it, so quick clicks do not undo each other.
-  const [local, setLocal] = useState<AutoRules | null>(null)
-  const rules = local ?? view.rules ?? { publish: true, remember: true, viewers: true }
+  // The choices made here that the server has not reported back yet, and its rules before them: the last choice wins
+  // over the streamed state meanwhile, so quick clicks do not undo each other. Once the server reports it, or reports
+  // rules that are none of these while nothing is being saved (another admin, or Close all, which switches them all
+  // off), the server's rules show again: the next click starts from what is in force, never from an older choice.
+  const [local, setLocal] = useState<{ sent: AutoRules[]; over: AutoRules | undefined } | null>(
+    null,
+  )
   const save = useMutation({
     mutationFn: setAutoRules,
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: exposureQuery.queryKey }),
+    onError: () => {
+      setLocal(null)
+    },
   })
+  const chosen = local?.sent.at(-1)
+  if (
+    local &&
+    (sameRules(chosen, view.rules) ||
+      (!save.isPending && ![local.over, ...local.sent].some((r) => sameRules(r, view.rules))))
+  ) {
+    setLocal(null)
+  }
+  const rules = chosen ?? view.rules ?? { publish: true, remember: true, viewers: true }
   const now = useNow()
   const auto = view.auto ?? []
   return (
@@ -495,7 +514,10 @@ function AutomaticRules({ view }: { view: Exposure }) {
                 checked={rules[r.key]}
                 onChange={(e) => {
                   const next = { ...rules, [r.key]: e.target.checked }
-                  setLocal(next)
+                  setLocal({
+                    sent: [...(local?.sent ?? []), next],
+                    over: local ? local.over : view.rules,
+                  })
                   save.mutate(next)
                 }}
               />
