@@ -125,23 +125,29 @@ web_deps() {
   echo "$want" >"$stamp"
 }
 
-# parallel NAME=FUNCTION...: runs the functions at once, each in a subshell with its output kept in
-# .cache/parallel/NAME.log, then prints the logs in order and fails if any failed. Their containers share the host's
-# CPUs, so a run takes about as long as its slowest job.
+# parallel NAME=FUNCTION...: runs the functions side by side, each in a subshell with its output kept in
+# .cache/parallel/NAME.log, then prints the logs in order and fails if any failed. At most half as many run at once as
+# there are CPUs (at least two), in the order given: each job's containers use several CPUs themselves, and nine at
+# once on a 4-CPU CI runner made the web tests run ten times slower than alone and time out.
 parallel() {
-  local job name i dir="$CACHE/parallel" failed=() pids=() jobs=()
+  local job name i dir="$CACHE/parallel" failed=() pids=() names=() limit
+  limit=$(($(nproc) / 2))
+  ((limit >= 2)) || limit=2
   mkdir -p "$dir"
   for job in "$@"; do
+    while (($(jobs -rp | wc -l) >= limit)); do
+      sleep 0.2
+    done
     name=${job%%=*}
     # shellcheck disable=SC2086 # "function args" splits into the command on purpose
     ( ${job#*=} ) >"$dir/$name.log" 2>&1 &
     pids+=("$!")
-    jobs+=("$name")
+    names+=("$name")
   done
   for i in "${!pids[@]}"; do
-    wait "${pids[$i]}" || failed+=("${jobs[$i]}")
+    wait "${pids[$i]}" || failed+=("${names[$i]}")
   done
-  for name in "${jobs[@]}"; do
+  for name in "${names[@]}"; do
     step "$name"
     cat "$dir/$name.log"
   done
@@ -308,9 +314,10 @@ cmd_build() {
 cmd_ci() {
   cmd_deps
   mediamtx_bin
-  parallel "lint: go=lint_go" "lint: web types=lint_types" "lint: web eslint=lint_eslint" \
-    "lint: formatting, shell, compose, pins=lint_rest" "test: go=test_go" "test: web=test_web" \
-    "gen-check=gen_check" "spec-verify=cmd_spec_verify" "build=cmd_build"
+  # The slowest first, so they start before the limit (parallel) holds anything back.
+  parallel "test: go=test_go" "build=cmd_build" "test: web=test_web" "lint: go=lint_go" \
+    "lint: web eslint=lint_eslint" "lint: web types=lint_types" "lint: formatting, shell, compose, pins=lint_rest" \
+    "gen-check=gen_check" "spec-verify=cmd_spec_verify"
   step "ci: all checks passed"
 }
 

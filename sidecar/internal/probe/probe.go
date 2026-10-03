@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -49,7 +50,11 @@ type Prober struct {
 	publicHost string
 	client     *http.Client
 	dial       func(ctx context.Context, network, addr string) (net.Conn, error)
+	lookup     func(ctx context.Context, host string) ([]netip.Addr, error)
 	log        *slog.Logger
+
+	// StackSubnet is the stack network's (settings.StackSubnet). A PUBLIC_HOST there is no test of publishing.
+	StackSubnet netip.Prefix
 
 	mu       sync.RWMutex
 	status   Status
@@ -68,6 +73,9 @@ func New(api string, principal Authorizer, expected, publicHost string, log *slo
 	return &Prober{
 		api: strings.TrimSuffix(api, "/"), principal: principal, expected: expected, publicHost: publicHost,
 		client: &http.Client{Timeout: 5 * time.Second}, dial: d.DialContext, log: log,
+		lookup: func(ctx context.Context, host string) ([]netip.Addr, error) {
+			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		},
 		status: Status{ExpectedVersion: expected}, warnings: map[string]Warning{},
 	}
 }
@@ -144,10 +152,17 @@ func (p *Prober) Check(ctx context.Context) {
 }
 
 // CheckExposure warns about each never-published MediaMTX port that accepts TCP connections at PUBLIC_HOST. From
-// inside the stack this cannot prove a port is closed to the internet, so it only ever warns.
+// inside the stack this cannot prove a port is closed to the internet, so it only ever warns. A PUBLIC_HOST on the
+// stack's own network or on loopback (the e2e stack names the mediamtx container) reaches those ports whether or not
+// anything is published, so there is nothing to check.
 func (p *Prober) CheckExposure(ctx context.Context) {
+	inside := p.insideStack(ctx)
 	for _, np := range neverPublished {
 		code := "exposed_" + strconv.Itoa(np.port)
+		if inside {
+			p.Clear(code)
+			continue
+		}
 		conn, err := p.dial(ctx, "tcp", net.JoinHostPort(p.publicHost, strconv.Itoa(np.port)))
 		if err != nil {
 			p.Clear(code)
@@ -156,6 +171,26 @@ func (p *Prober) CheckExposure(ctx context.Context) {
 		_ = conn.Close()
 		p.Warn(code, fmt.Sprintf("Port %d (MediaMTX %s) accepts connections at %s. It must never be published.", np.port, np.what, p.publicHost))
 	}
+}
+
+// insideStack reports whether PUBLIC_HOST names an address on loopback or the stack's own network. A name that does
+// not resolve is not inside: the dial then fails, and nothing warns.
+func (p *Prober) insideStack(ctx context.Context) bool {
+	addrs := []netip.Addr{}
+	if a, err := netip.ParseAddr(p.publicHost); err == nil {
+		addrs = append(addrs, a)
+	} else {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		addrs, _ = p.lookup(ctx, p.publicHost)
+	}
+	for _, a := range addrs {
+		a = a.Unmap()
+		if a.IsLoopback() || (p.StackSubnet.IsValid() && p.StackSubnet.Contains(a)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Prober) get(ctx context.Context, path string, authorize bool) (int, []byte, error) {

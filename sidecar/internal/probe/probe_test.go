@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -82,6 +83,10 @@ func TestVersionMismatchWarns(t *testing.T) {
 
 func TestExposure(t *testing.T) {
 	p := New("http://127.0.0.1:1", principal{}, "1.21.1", "mtx.example.com", quiet())
+	p.StackSubnet = netip.MustParsePrefix("172.29.44.0/24")
+	p.lookup = func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("203.0.113.7")}, nil
+	}
 	open := map[string]bool{"mtx.example.com:9997": true}
 	p.dial = func(_ context.Context, _, addr string) (net.Conn, error) {
 		if open[addr] {
@@ -100,6 +105,24 @@ func TestExposure(t *testing.T) {
 	p.CheckExposure(context.Background())
 	if len(p.Status().Warnings) != 0 {
 		t.Errorf("a closed port still warns: %v", p.Status().Warnings)
+	}
+
+	// On the stack's own network (or loopback) every port answers, published or not: nothing to warn about.
+	for _, host := range []string{"mediamtx", "127.0.0.1", "::1"} {
+		q := New("http://127.0.0.1:1", principal{}, "1.21.1", host, quiet())
+		q.StackSubnet = netip.MustParsePrefix("172.29.44.0/24")
+		q.lookup = func(context.Context, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("172.29.44.3")}, nil
+		}
+		q.dial = func(context.Context, string, string) (net.Conn, error) {
+			c1, c2 := net.Pipe()
+			_ = c2.Close()
+			return c1, nil
+		}
+		q.CheckExposure(context.Background())
+		if w := q.Status().Warnings; len(w) != 0 {
+			t.Errorf("%s: warnings %v", host, w)
+		}
 	}
 }
 

@@ -38,7 +38,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     // ./dev ci runs everything at once, and the settings forms render hundreds of fields: 5 s is too tight then.
-    testTimeout: 15_000,
+    testTimeout: 30_000, // a CI runner with 4 CPUs is several times slower than a workstation
     setupFiles: ['./src/test/setup.ts'],
     restoreMocks: true,
     unstubGlobals: true,

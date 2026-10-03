@@ -270,6 +270,7 @@ func start(ctx context.Context, cfg *settings.Settings, log *slog.Logger, logHub
 		return err
 	}
 	prober := probe.New(apiURL, principal, buildinfo.MediaMTXVersion, cfg.PublicHost, log)
+	prober.StackSubnet = cfg.StackSubnet
 	sessions := auth.NewSessions(c.store, cfg.Secure(), cfg.SessionIdleTimeout, cfg.SessionMaxAge)
 	// Exposure control: the host helper reads desired.json from portgate/ and writes its status into portgate-status/
 	// (a read-only mount of /var/lib/mtx-portgate). Without the helper there is no status and the UI says so.
