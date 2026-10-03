@@ -24,7 +24,8 @@ if failed=$(grep -o 'failed: .*(logs in' "$out" | tail -1); then
     name=$(basename "$f" .log)
     [[ $failed == *"$name"* ]] || continue
     {
-      grep -E -- '--- FAIL|_test\.go:[0-9]+|panic:|^FAIL|FAIL |✗|×|Error:|error:|issues:|\(revive\)|\(gofumpt\)|drifted|differs' "$f" | head -n 40
+      # A failure's own lines and the few after it (a test's message often continues: MediaMTX's output, a diff).
+      grep -E -A6 -- '--- FAIL|_test\.go:[0-9]+|panic:|✗|×|Error:|error:|issues:|\(revive\)|\(gofumpt\)|drifted|differs' "$f" | head -n 60
       echo "-----"
       tail -n 15 "$f"
     } | annotate "$title: $name"

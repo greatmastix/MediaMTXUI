@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"os"
 	"os/exec"
@@ -35,15 +36,35 @@ func Reference(t testing.TB) string {
 	return p
 }
 
-// FreePort returns a TCP port on 127.0.0.1 that was free a moment ago.
+// Ports for FreePort come from below Linux's ephemeral range (32768 and up). A port the kernel picks there (":0") can
+// be taken again by an outgoing connection of a parallel test before MediaMTX listens on it, and MediaMTX then exits
+// with "address already in use". Each test process starts at a random place, so packages rarely meet.
+const portLow, portHigh = 20000, 32000
+
+var (
+	portMu   sync.Mutex
+	portNext = portLow + rand.IntN(portHigh-portLow)
+)
+
+// FreePort returns a TCP port on 127.0.0.1 that was free a moment ago, and that this process has not handed out yet.
 func FreePort(t testing.TB) int {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	portMu.Lock()
+	defer portMu.Unlock()
+	for range portHigh - portLow {
+		p := portNext
+		if portNext++; portNext >= portHigh {
+			portNext = portLow
+		}
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
+		if err != nil {
+			continue
+		}
+		_ = ln.Close()
+		return p
 	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port
+	t.Fatal("no free port between 20000 and 32000")
+	return 0
 }
 
 // Instance is a running MediaMTX.
