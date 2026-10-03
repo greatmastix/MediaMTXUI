@@ -56,8 +56,24 @@ type Instance struct {
 func (i *Instance) Logs() string { return i.logs.String() }
 
 // Start writes config to a temporary mediamtx.yml and runs MediaMTX until the test ends. It waits until readyPort
-// on 127.0.0.1 accepts connections.
+// on 127.0.0.1 accepts connections. A MediaMTX that dies without a word during startup (killed from outside, as on a
+// CI runner short of memory) gets one more try; one that says why it stopped (a config error) fails the test at once.
 func Start(t *testing.T, config string, readyPort int) *Instance {
+	t.Helper()
+	inst, silent := start(t, config, readyPort, false)
+	if inst == nil && silent {
+		t.Log("MediaMTX stopped during startup without any output; trying once more")
+		inst, _ = start(t, config, readyPort, true)
+	}
+	if inst == nil {
+		t.FailNow()
+	}
+	return inst
+}
+
+// start runs MediaMTX once. It returns nil when MediaMTX does not come up, and whether it exited without any output;
+// that case fails the test only on the last try (final), and is logged otherwise.
+func start(t *testing.T, config string, readyPort int, final bool) (*Instance, bool) {
 	t.Helper()
 	bin := Bin(t)
 	dir := t.TempDir()
@@ -76,7 +92,8 @@ func Start(t *testing.T, config string, readyPort int) *Instance {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
-	go func() { _ = cmd.Wait(); close(done) }()
+	var waitErr error
+	go func() { waitErr = cmd.Wait(); close(done) }()
 	t.Cleanup(func() {
 		cancel()
 		<-done
@@ -90,15 +107,22 @@ func Start(t *testing.T, config string, readyPort int) *Instance {
 		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", readyPort), 200*time.Millisecond)
 		if err == nil {
 			_ = c.Close()
-			return inst
+			return inst, false
 		}
 		select {
 		case <-done:
-			t.Fatalf("MediaMTX exited during startup:\n%s", inst.Logs())
+			silent := inst.Logs() == ""
+			if silent && !final {
+				t.Logf("MediaMTX exited during startup (%v), without any output", waitErr)
+			} else {
+				t.Errorf("MediaMTX exited during startup (%v):\n%s", waitErr, inst.Logs())
+			}
+			return nil, silent
 		default:
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("MediaMTX not listening on %d after 10 s:\n%s", readyPort, inst.Logs())
+			t.Errorf("MediaMTX not listening on %d after 10 s:\n%s", readyPort, inst.Logs())
+			return nil, false
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
