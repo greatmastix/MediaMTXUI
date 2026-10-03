@@ -423,18 +423,24 @@ func TestLoginTimingIsEqualised(t *testing.T) {
 	h := newHarness(t, map[string]string{"MTXUI_LOCKOUT_THRESHOLD": "100"}, auth.Params{Memory: 32 * 1024, Time: 1, Threads: 1})
 	h.completeSetup()
 	h.signOutLocally()
-	median := func(user string) time.Duration {
-		var ds []time.Duration
-		for i := range 15 {
-			start := time.Now()
-			h.do("POST", "/api/v1/auth/login", map[string]string{"username": user, "password": "wrong password " + string(rune('a'+i))},
-				header("X-Forwarded-For", "198.51.100."+string(rune('1'+i%9))))
-			ds = append(ds, time.Since(start))
-		}
+	attempt := func(user string, i int) time.Duration {
+		start := time.Now()
+		h.do("POST", "/api/v1/auth/login", map[string]string{"username": user, "password": "wrong password " + string(rune('a'+i))},
+			header("X-Forwarded-For", "198.51.100."+string(rune('1'+i%9))))
+		return time.Since(start)
+	}
+	median := func(ds []time.Duration) time.Duration {
 		sort.Slice(ds, func(i, j int) bool { return ds[i] < ds[j] })
 		return ds[len(ds)/2]
 	}
-	unknown, wrong := median("nobody-here"), median("admin")
+	// Interleaved, so that load on the machine changing meanwhile (other packages' tests on a CI runner) weighs on
+	// both alike.
+	var us, ws []time.Duration
+	for i := range 15 {
+		us = append(us, attempt("nobody-here", i))
+		ws = append(ws, attempt("admin", i))
+	}
+	unknown, wrong := median(us), median(ws)
 	diff := unknown - wrong
 	if diff < 0 {
 		diff = -diff
