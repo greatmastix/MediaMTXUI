@@ -21,13 +21,14 @@ func TestMeasure(t *testing.T) {
 	write("live/woo/2026-10-01_12-01-00-000000.mp4", 500)
 	write("cam/2026-10-01_12-00-00-000000.ts", 300)
 	write("filler", 5000)     // not a segment
-	write("stray.mp4", 7000)  // not in a path's directory
+	write("top.mp4", 7000)    // in the root, as a recordPath like /recordings/%path_%s puts a path without a slash
 	write("cam/notes.txt", 9) // not a segment
 	u, err := Measure(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.ByDir["live/woo"] != 1500 || u.ByDir["cam"] != 300 || u.Bytes != 1800 || len(u.ByDir) != 2 {
+	if u.Files["live/woo/2026-10-01_12-00-00-000000.mp4"] != 1000 || u.Files["live/woo/2026-10-01_12-01-00-000000.mp4"] != 500 ||
+		u.Files["cam/2026-10-01_12-00-00-000000.ts"] != 300 || u.Files["top.mp4"] != 7000 || u.Bytes != 8800 || len(u.Files) != 4 {
 		t.Errorf("usage %+v", u)
 	}
 	if u.Total <= 0 || u.Free <= 0 || u.Free > u.Total {

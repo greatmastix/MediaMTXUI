@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,18 +32,29 @@ import (
 //
 // The budget: every MTXUI_RECORDINGS_CHECK_EVERY the volume is measured; over MTXUI_RECORDINGS_MAX_GB, or under
 // MTXUI_RECORDINGS_MIN_FREE_GB free, the oldest segments are deleted through the API (never a path's newest, which may
-// be in progress). Under MTXUI_RECORDINGS_CRITICAL_FREE_GB free (pruning could not help: something else fills the
-// disk), the guard switches recording off for every path that records, with a banner and an audit entry, until an admin
-// switches it back on.
+// be in progress), just enough of them: each segment's size is its own file's, found the way MediaMTX names it from
+// the recordPath. When deleting every segment MediaMTX lists would not be enough (files it does not list, from an
+// earlier recordPath or copied in, take the space, or something else fills the disk), none are deleted and a banner
+// says why. Under MTXUI_RECORDINGS_CRITICAL_FREE_GB free, the guard switches recording off for every path that records,
+// with a banner and an audit entry, until an admin switches it back on; recording switched on again meanwhile (by a
+// stream's manager, or in the config) goes off again at the next check that finds the disk that full.
+//
+// An export holds one of MTXUI_EXPORT_CONCURRENCY slots, shared by everyone, for at most twice its range plus
+// exportSlack, however slowly its client reads: a player paused in a tab, or a client that reads nothing, gives the slot
+// back then (its connection breaks).
 
 // recordingsState is what the budget loop last measured.
 type recordingsState struct {
-	mu      sync.Mutex
-	usage   recdisk.Usage
-	at      time.Time
-	err     string
-	exports chan struct{} // one token per running export
+	mu        sync.Mutex
+	usage     recdisk.Usage
+	at        time.Time
+	err       string
+	shortfall string        // why the budget loop deleted nothing although recordings must shrink, or ""
+	exports   chan struct{} // one token per running export
 }
+
+// exportSlack is how much longer than twice its range an export may take.
+var exportSlack = time.Minute
 
 func (s *Server) recordingsRoot() string { return path.Join(s.d.Settings.DataDir, "recordings") }
 
@@ -92,6 +104,37 @@ func (s *Server) listRecordings(ctx context.Context) ([]recording, error) {
 	return out, nil
 }
 
+// recordPaths is every recordPath in mediamtx.yml, pathDefaults' (or MediaMTX's own default) first.
+func (s *Server) recordPaths() []string {
+	cfg := s.readMTXConfig()
+	def := recdisk.DefaultRecordPath
+	if pd, ok := cfg.global["pathDefaults"].(map[string]any); ok {
+		if rp, ok := pd["recordPath"].(string); ok && rp != "" {
+			def = rp
+		}
+	}
+	var others []string
+	for _, p := range cfg.paths {
+		if rp, ok := p["recordPath"].(string); ok && rp != def && !slices.Contains(others, rp) {
+			others = append(others, rp)
+		}
+	}
+	sort.Strings(others)
+	return append([]string{def}, others...)
+}
+
+// segmentSizes flattens MediaMTX's listing and finds each segment's file in u: its size, or -1 when none is measured,
+// and the bytes in segment files MediaMTX does not list.
+func (s *Server) segmentSizes(list []recording, u recdisk.Usage) (segs []recdisk.Segment, sizes []int64, unlisted int64) {
+	for _, rec := range list {
+		for _, sg := range rec.Segments {
+			segs = append(segs, recdisk.Segment{Path: rec.Name, Start: sg.Start})
+		}
+	}
+	sizes, unlisted = u.Sizes(s.recordPaths(), segs)
+	return segs, sizes, unlisted
+}
+
 // RecordingsDisk is the recordings filesystem as the page shows it.
 type RecordingsDisk struct {
 	Recordings int64        `json:"recordings"` // bytes of segments
@@ -137,14 +180,19 @@ func (s *Server) recordingsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.rec.mu.Lock()
-	sizes := s.rec.usage.ByDir
+	u := s.rec.usage
 	s.rec.mu.Unlock()
+	segs, sizes, _ := s.segmentSizes(list, u)
+	bytes := map[string]int64{}
+	for i, sg := range segs {
+		bytes[sg.Path] += max(0, sizes[i])
+	}
 	paths := []RecordingPath{}
 	for _, rec := range list {
 		if len(rec.Segments) == 0 {
 			continue
 		}
-		p := RecordingPath{Name: rec.Name, Segments: len(rec.Segments), First: rec.Segments[0].Start, Bytes: sizes[rec.Name]}
+		p := RecordingPath{Name: rec.Name, Segments: len(rec.Segments), First: rec.Segments[0].Start, Bytes: bytes[rec.Name]}
 		for _, seg := range rec.Segments {
 			if seg.Start.Before(p.First) {
 				p.First = seg.Start
@@ -310,11 +358,18 @@ func (s *Server) recordingExport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, "busy", fmt.Sprintf("%d exports are running; try again when one ends.", cap(slots)))
 		return
 	}
+	// The slot comes back by end however the client reads (the server has no WriteTimeout): a player reads about as
+	// fast as it plays, a download faster unless the link is slower than half the stream's bitrate. Past end, writing
+	// to the client fails, and so does reading from MediaMTX. (net/http lifts the deadline when the request is done.)
+	end := time.Now().Add(2*time.Duration(secs*float64(time.Second)) + exportSlack)
+	_ = http.NewResponseController(w).SetWriteDeadline(end)
+	ctx, cancel := context.WithDeadline(r.Context(), end)
+	defer cancel()
 	get := url.Values{
 		"path": {name}, "start": {start.UTC().Format(time.RFC3339Nano)},
 		"duration": {strconv.FormatFloat(secs, 'f', -1, 64)}, "format": {format},
 	}
-	resp, err := s.d.Playback.Open(r.Context(), "/get?"+get.Encode())
+	resp, err := s.d.Playback.Open(ctx, "/get?"+get.Encode())
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "mediamtx", "MediaMTX's playback server does not answer.")
 		return
@@ -424,33 +479,23 @@ func (s *Server) recordingsOnce(ctx context.Context) {
 		return
 	}
 	set := s.d.Settings
-	// over says why recordings must shrink, and by how many bytes.
-	over := func(u recdisk.Usage) (string, int64) {
-		switch {
-		case set.RecordingsMaxBytes > 0 && u.Bytes > set.RecordingsMaxBytes:
-			return "budget", u.Bytes - set.RecordingsMaxBytes
-		case set.RecordingsMinFreeBytes > 0 && u.Free < set.RecordingsMinFreeBytes:
-			return "free space", set.RecordingsMinFreeBytes - u.Free
-		}
-		return "", 0
+	// Why recordings must shrink, and by how many bytes.
+	var why string
+	var need int64
+	if set.RecordingsMaxBytes > 0 && u.Bytes > set.RecordingsMaxBytes {
+		why, need = "budget", u.Bytes-set.RecordingsMaxBytes
 	}
-	if why, _ := over(u); why != "" {
-		deleted := 0
-		for round := 0; round < 20; round++ {
-			reason, need := over(u)
-			if reason == "" {
-				break
-			}
-			n := s.pruneOldest(ctx, need, u)
-			if n == 0 {
-				break // nothing left to delete: only the segments being written remain
-			}
-			deleted += n
+	if set.RecordingsMinFreeBytes > 0 && set.RecordingsMinFreeBytes-u.Free > need {
+		why, need = "free space", set.RecordingsMinFreeBytes-u.Free
+	}
+	shortfall := ""
+	if why != "" {
+		var deleted int
+		deleted, shortfall = s.pruneOldest(ctx, why, need, u)
+		if deleted > 0 {
 			if u, err = s.measure(); err != nil {
 				return
 			}
-		}
-		if deleted > 0 {
 			s.d.Log.Info("recordings pruned", "reason", why, "segments", deleted, "bytes", u.Bytes, "free", u.Free)
 			s.d.Audit.Record(ctx, store.AuditEvent{
 				Actor: "system", Action: "recordings.prune", Target: "recordings",
@@ -458,53 +503,87 @@ func (s *Server) recordingsOnce(ctx context.Context) {
 			})
 		}
 	}
-	if set.RecordingsCriticalBytes > 0 && u.Free < set.RecordingsCriticalBytes && s.guard(ctx) == nil {
-		s.tripGuard(ctx, u)
+	s.rec.mu.Lock()
+	was := s.rec.shortfall
+	s.rec.shortfall = shortfall
+	s.rec.mu.Unlock()
+	if shortfall != "" && was == "" {
+		s.d.Log.Warn("recordings: pruning cannot help", "reason", shortfall)
+	}
+	if set.RecordingsCriticalBytes > 0 && u.Free < set.RecordingsCriticalBytes {
+		s.tripGuard(ctx, u) // again if recording was switched back on while the guard is on
 	}
 }
 
-// pruneOldest deletes the oldest segments across all paths until about need bytes are gone, never a path's newest
-// (it may be in progress). A segment's size is estimated from its path's measured total; the caller measures again.
-func (s *Server) pruneOldest(ctx context.Context, need int64, u recdisk.Usage) int {
+// pruneOldest deletes the oldest segments across all paths until need bytes are gone, never a path's newest (it may
+// be in progress; once done, the next check may delete it), nor one whose file it cannot find. When even all the
+// segments MediaMTX lists would not make need bytes, recordings are not what takes the space: it deletes none and says
+// why instead.
+func (s *Server) pruneOldest(ctx context.Context, why string, need int64, u recdisk.Usage) (deleted int, shortfall string) {
 	list, err := s.listRecordings(ctx)
 	if err != nil {
 		s.d.Log.Warn("recordings: cannot list for pruning", "err", err)
-		return 0
+		return 0, ""
+	}
+	segs, sizes, unlisted := s.segmentSizes(list, u)
+	newest := map[string]time.Time{}
+	listed := int64(0)
+	for i, sg := range segs {
+		if sg.Start.After(newest[sg.Path]) {
+			newest[sg.Path] = sg.Start
+		}
+		listed += max(0, sizes[i])
+	}
+	if listed < need {
+		return 0, shortfallText(why, need, listed, unlisted)
 	}
 	type seg struct {
-		path  string
-		start time.Time
-		size  int64
+		recdisk.Segment
+		size int64
 	}
-	var all []seg
-	for _, rec := range list {
-		size := int64(1)
-		if len(rec.Segments) > 0 {
-			size = max(1, u.ByDir[rec.Name]/int64(len(rec.Segments)))
-		}
-		starts := make([]time.Time, 0, len(rec.Segments))
-		for _, sg := range rec.Segments {
-			starts = append(starts, sg.Start)
-		}
-		sort.Slice(starts, func(i, j int) bool { return starts[i].Before(starts[j]) })
-		for i, st := range starts {
-			if i < len(starts)-1 {
-				all = append(all, seg{rec.Name, st, size})
-			}
+	var old []seg
+	for i, sg := range segs {
+		if sizes[i] >= 0 && sg.Start.Before(newest[sg.Path]) {
+			old = append(old, seg{sg, sizes[i]})
 		}
 	}
-	sort.Slice(all, func(i, j int) bool { return all[i].start.Before(all[j].start) })
-	deleted, freed := 0, int64(0)
-	for _, sg := range all {
-		if freed >= need || deleted >= 500 {
+	sort.Slice(old, func(i, j int) bool { return old[i].Start.Before(old[j].Start) })
+	freed := int64(0)
+	for _, sg := range old {
+		if freed >= need {
 			break
 		}
-		if d, _ := s.deleteSegments(ctx, sg.path, []time.Time{sg.start}); d == 1 {
+		if d, _ := s.deleteSegments(ctx, sg.Path, []time.Time{sg.Start}); d == 1 {
 			deleted++
 			freed += sg.size
 		}
 	}
-	return deleted
+	return deleted, ""
+}
+
+// shortfallText is the banner for recordings that must shrink by need bytes when all MediaMTX lists is only listed.
+func shortfallText(why string, need, listed, unlisted int64) string {
+	text := fmt.Sprintf("Recordings are %s over the budget", bannerBytes(need))
+	if why == "free space" {
+		text = fmt.Sprintf("The recordings volume needs %s more free space", bannerBytes(need))
+	}
+	text += fmt.Sprintf(", but all the recordings MediaMTX lists come to only %s, so none were deleted.", bannerBytes(listed))
+	switch {
+	case unlisted > 0:
+		text += fmt.Sprintf(" %s of segment files on the volume are not in MediaMTX's list (left from an earlier "+
+			"recordPath, or copied there): MediaMTX cannot delete them, so remove them by hand.", bannerBytes(unlisted))
+	case why == "free space":
+		text += " Something other than recordings fills the disk."
+	}
+	return text
+}
+
+// bannerBytes is a number of bytes for a banner: MB under a GB.
+func bannerBytes(n int64) string {
+	if n < 1<<30 {
+		return fmt.Sprintf("%.0f MB", float64(n)/(1<<20))
+	}
+	return fmt.Sprintf("%.1f GB", float64(n)/(1<<30))
 }
 
 // The guard.
@@ -550,30 +629,31 @@ func asBool(v any) (bool, bool) {
 	return false, false
 }
 
-// tripGuard switches recording off wherever it is on.
+// tripGuard switches recording off wherever it is on. When the guard is on already (recording was switched back on
+// since), it adds what it switches off now to what the admin's release switches back on.
 func (s *Server) tripGuard(ctx context.Context, u recdisk.Usage) {
 	cfg := s.readMTXConfig()
-	g := guardRecord{Since: time.Now(), Free: u.Free}
+	var off guardRecord // what records now
 	if pd, ok := cfg.global["pathDefaults"].(map[string]any); ok && yes(pd["record"]) {
-		g.Defaults = true
+		off.Defaults = true
 	}
 	for name, p := range cfg.paths {
 		if yes(p["record"]) {
-			g.Paths = append(g.Paths, name)
+			off.Paths = append(off.Paths, name)
 		}
 	}
-	sort.Strings(g.Paths)
-	if !g.Defaults && len(g.Paths) == 0 {
+	sort.Strings(off.Paths)
+	if !off.Defaults && len(off.Paths) == 0 {
 		return // nothing records: recordings are not what fills the disk
 	}
 	reason := fmt.Sprintf("recording switched off: %.1f GB free on the recordings volume", float64(u.Free)/(1<<30))
 	_, err := s.d.Config.Edit(ctx, "system", reason, s.guardEdit, func(d *yamledit.Doc) error {
-		if g.Defaults {
+		if off.Defaults {
 			if err := d.Set([]string{"pathDefaults", "record"}, false); err != nil {
 				return err
 			}
 		}
-		for _, name := range g.Paths {
+		for _, name := range off.Paths {
 			if err := d.Set([]string{"paths", name, "record"}, false); err != nil {
 				return err
 			}
@@ -584,14 +664,25 @@ func (s *Server) tripGuard(ctx context.Context, u recdisk.Usage) {
 		s.d.Log.Error("recordings guard: cannot switch recording off", "err", err)
 		return
 	}
+	g := guardRecord{Defaults: off.Defaults, Paths: off.Paths}
+	if prev := s.guard(ctx); prev != nil {
+		g.Defaults = g.Defaults || prev.Defaults
+		for _, name := range prev.Paths {
+			if !slices.Contains(g.Paths, name) {
+				g.Paths = append(g.Paths, name)
+			}
+		}
+		sort.Strings(g.Paths)
+	}
+	g.Since, g.Free = time.Now(), u.Free
 	b, _ := json.Marshal(g)
 	if err := s.d.Store.SetMeta(ctx, guardKey, string(b)); err != nil {
 		s.d.Log.Error("recordings guard: cannot remember what was switched off", "err", err)
 	}
-	s.d.Log.Warn("recordings guard tripped", "free", u.Free, "paths", g.Paths, "defaults", g.Defaults)
+	s.d.Log.Warn("recordings guard tripped", "free", u.Free, "paths", off.Paths, "defaults", off.Defaults)
 	s.d.Audit.Record(ctx, store.AuditEvent{
 		Actor: "system", Action: "recordings.guard", Target: "recordings",
-		Details: map[string]any{"free": u.Free, "paths": g.Paths, "defaults": g.Defaults},
+		Details: map[string]any{"free": u.Free, "paths": off.Paths, "defaults": off.Defaults},
 	})
 }
 
@@ -641,13 +732,19 @@ func (s *Server) recordingsGuardRelease(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, s.recordingsDisk(ctx))
 }
 
-// recordingWarnings is the guard's banner, for every page.
+// recordingWarnings is the guard's banner and the budget's, for every page.
 func (s *Server) recordingWarnings(ctx context.Context) []probe.Warning {
-	g := s.guard(ctx)
-	if g == nil {
-		return nil
+	var out []probe.Warning
+	s.rec.mu.Lock()
+	shortfall := s.rec.shortfall
+	s.rec.mu.Unlock()
+	if shortfall != "" {
+		out = append(out, probe.Warning{Code: "recordings_budget", Message: shortfall})
 	}
-	return []probe.Warning{{Code: "recordings_guard", Message: fmt.Sprintf(
-		"Recording is switched off: only %.1f GB were free on the recordings volume (%s). Make room, then an admin "+
-			"switches it back on under Recordings.", float64(g.Free)/(1<<30), g.Since.UTC().Format("2006-01-02 15:04 MST"))}}
+	if g := s.guard(ctx); g != nil {
+		out = append(out, probe.Warning{Code: "recordings_guard", Message: fmt.Sprintf(
+			"Recording is switched off: only %.1f GB were free on the recordings volume (%s). Make room, then an admin "+
+				"switches it back on under Recordings.", float64(g.Free)/(1<<30), g.Since.UTC().Format("2006-01-02 15:04 MST"))})
+	}
+	return out
 }
