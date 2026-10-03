@@ -101,6 +101,7 @@ for (const theme of ['Light', 'Dark'] as const) {
   })
 
   test(`the configuration pages, ${theme.toLowerCase()} theme`, async ({ page }) => {
+    test.slow() // six full-page axe scans of the largest pages: 17 s on a workstation, over 30 on a CI runner
     await inTheme(page, theme, '/config')
     const configNav = page.getByRole('navigation', { name: 'Configuration' })
     for (const tab of [

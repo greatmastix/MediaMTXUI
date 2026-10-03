@@ -1,3 +1,5 @@
+import { availableParallelism } from 'node:os'
+
 import { defineConfig, devices, type Project } from '@playwright/test'
 
 // Runs inside the e2e compose stack (`./dev e2e`), which publishes nothing: the sidecar and MediaMTX are reached by
@@ -24,7 +26,8 @@ export default defineConfig({
   testDir: './tests',
   forbidOnly: !!process.env.CI,
   retries: 0,
-  workers: 6,
+  // Each worker is a Chromium with live video: six on a workstation, one fewer than the CPUs on a small CI runner.
+  workers: Math.max(2, Math.min(6, availableParallelism() - 1)),
   grepInvert: process.env.E2E_SLOW ? undefined : /@slow/,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
