@@ -2,7 +2,7 @@
 
 MediaMTX UI runs in Docker, with Docker Compose starting its two containers from one file. This page takes you from a
 fresh machine to a working Docker: opening a terminal on the server, installing Docker Engine and the Compose plugin
-on Ubuntu, Debian, Raspberry Pi OS or Fedora/RHEL, and the few steps after. If `docker compose version` already
+with one command (or step by step on Ubuntu, Debian, Raspberry Pi OS or Fedora/RHEL), and the few steps after. If `docker compose version` already
 answers on your machine, you can skip to [Install](install.md).
 
 **Docker** runs programs in *containers*: each one comes with everything it needs, so you do not install MediaMTX or
@@ -32,18 +32,53 @@ the server. `exit` ends the session.
 Many commands below start with `sudo`, which runs them as the administrator (root). It asks for your own password
 the first time.
 
-## Which way to install
+## Install Docker with one command
+
+On Ubuntu, Debian, Raspberry Pi OS, Fedora and most other Linux systems, Docker's own install script does everything
+for you: it finds out which system you have, adds Docker's package repository, and installs Docker Engine with the
+Compose plugin. Download it:
+
+```bash
+curl -fsSL https://get.docker.com -o get-docker.sh
+```
+
+(If the shell says `curl: command not found`: `sudo apt install curl` on Ubuntu, Debian and Raspberry Pi OS,
+`sudo dnf install curl` on Fedora.)
+
+If you like, see what it would do first, without changing anything:
+
+```bash
+sudo sh ./get-docker.sh --dry-run
+```
+
+Then install:
+
+```bash
+sudo sh ./get-docker.sh
+```
+
+It takes a minute or two and ends with a few lines about using Docker as a non-root user. Continue with
+[After installing](#after-installing).
+
+> [!NOTE]
+> The script is meant for a fresh machine; run it once. Because it adds Docker's repository, Docker then updates
+> with the rest of the system (`sudo apt upgrade` or `sudo dnf upgrade`). Docker itself prefers the step-by-step way
+> below for production servers, mainly so that you see each change it makes; the result is the same packages.
+
+## Step by step instead
+
+If you prefer to install from Docker's repository by hand (or the script does not support your system), follow the
+steps for your system:
 
 | Your system | Use |
 |---|---|
-| Ubuntu 22.04, 24.04, 26.04 | [Docker's apt repository: Ubuntu](#ubuntu) |
-| Debian 12 (bookworm), 13 (trixie) | [Docker's apt repository: Debian](#debian-and-raspberry-pi-os) |
-| Raspberry Pi OS, 64-bit | [The Debian steps](#debian-and-raspberry-pi-os) |
-| Fedora, RHEL | [dnf](#fedora-and-rhel) |
-| Anything else, or you want it quick | [The convenience script](#the-quick-way-the-convenience-script) |
+| Ubuntu 22.04, 24.04, 26.04 | [Ubuntu](#ubuntu) |
+| Debian 12 (bookworm), 13 (trixie) | [Debian and Raspberry Pi OS](#debian-and-raspberry-pi-os) |
+| Raspberry Pi OS, 64-bit | [Debian and Raspberry Pi OS](#debian-and-raspberry-pi-os) |
+| Fedora, RHEL | [Fedora and RHEL](#fedora-and-rhel) |
 | Windows or macOS, to try it on your own computer | [Docker Desktop](#windows-and-macos-docker-desktop) |
 
-Install Docker from Docker's own repository, as below, rather than your distribution's `docker.io` or
+Either way, install Docker from Docker's own repository rather than your distribution's `docker.io` or
 `docker-compose` packages: those are often older, and MediaMTX UI's compose files need a current Compose plugin
 (`docker compose`, with a space).
 
@@ -204,33 +239,6 @@ sudo systemctl enable --now docker
 ```
 
 For CentOS Stream, see Docker's [CentOS page](https://docs.docker.com/engine/install/centos/).
-
-## The quick way: the convenience script
-
-Docker offers a script that detects your system and does all of the above in one go. It is handy for a test machine
-or a system the steps above do not cover:
-
-```bash
-curl -fsSL https://get.docker.com -o get-docker.sh
-```
-
-To see what it would do without changing anything:
-
-```bash
-sudo sh ./get-docker.sh --dry-run
-```
-
-To install:
-
-```bash
-sudo sh ./get-docker.sh
-```
-
-> [!WARNING]
-> Docker itself says the script is not recommended for production. It runs as root, installs the latest version
-> without asking, and is meant for a fresh machine; running it again later is not a supported way to upgrade. For a
-> server you will keep, the repository steps above are the better choice: afterwards, Docker updates with the rest
-> of the system (`sudo apt upgrade` or `sudo dnf upgrade`).
 
 ## After installing
 
