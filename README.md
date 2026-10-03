@@ -168,7 +168,8 @@ restore will change, and restore. The UI restarts with the backup in a few secon
 - Passwords are hashed with argon2id; sign-in is rate-limited and locks out guessing; sessions are server-side.
 - Optional second factors (authenticator app, passkeys), and a fresh confirmation before admin-level changes.
 
-Found a vulnerability? See [SECURITY.md](SECURITY.md).
+[docs/security.md](docs/security.md) has the whole list, with the test or check behind each item, and the
+decisions to know about. Found a vulnerability? See [SECURITY.md](SECURITY.md).
 
 **Exposure control** (advanced): stream ports that stay closed until an admin opens them for an address or a while.
 It needs a firewall in front of Docker that ufw rules control; see [docs/exposure-control.md](docs/exposure-control.md).
