@@ -1,16 +1,20 @@
 # Runs the same commands as a local checkout: everything happens in the containers pinned in deploy/tools.env.
+# The audit also runs every week, since new advisories appear without a change here.
 name: ci
 
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 5 * * 1"
 
 permissions:
   contents: read
 
 jobs:
   ci:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -20,6 +24,7 @@ jobs:
       - run: scripts/ci-run.sh ./dev ci
 
   e2e:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -27,3 +32,13 @@ jobs:
         with:
           persist-credentials: false
       - run: scripts/ci-run.sh ./dev e2e
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # gitleaks reads every commit
+      - run: scripts/ci-run.sh ./dev audit
