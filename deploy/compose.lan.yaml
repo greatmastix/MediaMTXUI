@@ -1,0 +1,19 @@
+# On a local network only (a home or studio network, nothing reachable from the internet): the sidecar serves the UI
+# over plain HTTP on port 8080, with no certificate and no ports 80 and 443. Set DOMAIN in .env to the address people
+# type to reach this host, its LAN IP (192.168.1.50) or a name your network resolves (mediamtx.local), and add this
+# line to .env, so that every docker compose command (upgrades included) uses both files:
+#
+#   COMPOSE_FILE=compose.yaml:compose.lan.yaml
+#
+# (In a checkout of the repository: docker compose -f compose.yaml -f deploy/compose.lan.yaml up -d.)
+#
+# The UI is then http://DOMAIN:8080 (UI_PORT changes the port). Open it by exactly that address: sign-in refuses
+# pages opened by another name or IP. Passkeys need HTTPS, so they are not offered; passwords and authenticator
+# apps work. Do not use this on a host the internet can reach: sign-in would travel unencrypted.
+services:
+  sidecar:
+    environment:
+      MTXUI_PUBLIC_URL: http://${DOMAIN:?set DOMAIN in .env}:${UI_PORT:-8080}
+      MTXUI_TLS: "off"
+    ports: !override
+      - "${UI_BIND:-0.0.0.0}:${UI_PORT:-8080}:9080"

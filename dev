@@ -180,6 +180,7 @@ lint_rest() {
   docker run --rm --network none -v "$ROOT:/mnt:ro" -w /mnt "$SHELLCHECK_IMAGE" -x "${scripts[@]}"
   compose_lint .env.example compose.yaml
   compose_lint .env.example compose.yaml deploy/compose.behind-proxy.yaml deploy/compose.exposure.yaml
+  compose_lint .env.example compose.yaml deploy/compose.lan.yaml
   dev_compose "$DEV_PROJECT" --profile vite config -q
   e2e_compose --profile e2e config -q
   pins_check
