@@ -107,8 +107,9 @@ test('the config UI: a path, a global setting, the YAML check and the history', 
   await page.getByLabel('source', { exact: true }).selectOption('url')
   await page.getByRole('textbox', { name: 'Source URL' }).fill('rtsp://127.0.0.1:9997/')
   await page.getByRole('button', { name: 'Create path' }).click()
-  // The SSRF guard answers in the page.
-  await expect(page.getByRole('alert')).toContainText('loopback')
+  // The SSRF guard answers in the page. (Alerts are picked by their text: the "MediaMTX is not answering" banner can
+  // show next to them while a setting change restarts MediaMTX's API.)
+  await expect(page.getByRole('alert').filter({ hasText: 'loopback' })).toBeVisible()
   await page.getByRole('textbox', { name: 'Source URL' }).fill('rtsp://192.0.2.10:554/stream')
   await page.getByLabel('sourceOnDemand', { exact: true }).selectOption('yes')
   await page.getByRole('button', { name: 'Create path' }).click()
@@ -138,7 +139,9 @@ test('the config UI: a path, a global setting, the YAML check and the history', 
   const text = await yaml.inputValue()
   await yaml.fill(text.replace('rtspTransports: [tcp]', 'rtspTransports: [bogus]'))
   await page.getByRole('button', { name: 'Check' }).click()
-  await expect(page.getByRole('alert')).toContainText('MediaMTX rejects the config')
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'MediaMTX rejects the config' }),
+  ).toBeVisible()
 
   await page
     .getByRole('navigation', { name: 'Configuration' })
