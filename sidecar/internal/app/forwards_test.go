@@ -48,7 +48,7 @@ func TestStreamForwards(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, nil, fast)
 	h.completeSetup()
-	const secret = "sk_live_SECRET123"
+	const secret = "sk_live_SECRET123" // gitleaks:allow (a test fixture)
 	var st streamJSON
 	h.json(h.do("POST", "/api/v1/streams", map[string]any{"name": "live/fw"}), &st)
 	base := "/api/v1/streams/" + itoa(st.ID) + "/forwards"

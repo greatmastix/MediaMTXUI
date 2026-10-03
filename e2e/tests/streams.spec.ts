@@ -171,7 +171,7 @@ test("the streamer joins, goes live with the page's key, and makes a new one", a
 
   // Forwarding to another server: MediaMTX takes it up while live (it cannot reach a documentation address, so it
   // keeps trying), switched off it stops, and the key never comes back or reaches a log.
-  const fwdKey = 'e2e-forward-key-4f9c2a71'
+  const fwdKey = 'e2e-forward-key-4f9c2a71' // gitleaks:allow (a test fixture)
   recordSecret(fwdKey)
   const forwarding = page.getByRole('region', { name: 'Forwarding' })
   await forwarding.getByRole('button', { name: 'Add a platform' }).click()

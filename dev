@@ -46,6 +46,8 @@ Maintenance
   bump-mediamtx <ver>   vendor the OpenAPI spec of another MediaMTX release and update every pin
   upgrade-test <ref>    the previous release's image makes data, this checkout's image opens it
   fuzz [seconds]        run every Go fuzz target for a while (default 30 s each)
+  audit                 known vulnerabilities in the Go code, in every binary the image ships and in the npm
+                        dependencies, and secrets in the git history (network)
   screenshots           take the README's screenshots (docs/screenshots/) from a fresh e2e stack
   clean                 remove caches, node_modules, build output and dev data
 EOF
@@ -586,6 +588,29 @@ cmd_e2e() {
   check_state_files
 }
 
+# cmd_audit: the checks that need today's advisories. The image is FROM scratch: the CA bundle, the sidecar's two
+# binaries and MediaMTX's. govulncheck reads the sidecar's source (symbol-level, with the Go toolchain and go.sum the
+# image is built with; the image's binaries are stripped, which leaves binary mode guessing per module) and
+# MediaMTX's binary, the file the image copies. npm audit fails on any advisory for a dependency that reaches the
+# bundle, and on critical ones for the build tools. gitleaks reads every commit of the current branch.
+cmd_audit() {
+  local govulncheck=golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION dir
+  step "audit: go source (the sidecar's binaries)"
+  NET=bridge go_ go run "$govulncheck" ./...
+  step "audit: MediaMTX $MEDIAMTX_VERSION's binary"
+  mediamtx_bin
+  NET=bridge go_ go run "$govulncheck" -mode binary "/cache/mediamtx/$MEDIAMTX_VERSION/mediamtx"
+  step "audit: npm"
+  for dir in web e2e; do
+    echo "-- $dir"
+    NET=bridge run "$NODE_IMAGE" "$dir" -e npm_config_cache=/cache/npm -- npm audit --omit dev
+    NET=bridge run "$NODE_IMAGE" "$dir" -e npm_config_cache=/cache/npm -- npm audit --audit-level critical
+  done
+  step "audit: secrets in the git history"
+  run "$GITLEAKS_IMAGE" . -- git --redact --no-banner --log-opts HEAD .
+  step "audit: no known vulnerabilities, no secrets"
+}
+
 # cmd_fuzz [SECONDS]: every Go fuzz target for SECONDS each (default 30); a crasher lands in testdata/fuzz/ as a test.
 cmd_fuzz() {
   local secs=${1:-30} line pkg fn
@@ -717,6 +742,7 @@ case $cmd in
   bump-mediamtx) cmd_bump_mediamtx "$@" ;;
   screenshots) cmd_screenshots ;;
   fuzz) cmd_fuzz "$@" ;;
+  audit) cmd_audit ;;
   upgrade-test) cmd_upgrade_test "$@" ;;
   offline-clips) cmd_offline_clips ;;
   clean) cmd_clean ;;

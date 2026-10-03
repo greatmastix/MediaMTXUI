@@ -1,0 +1,3 @@
+# Test fixtures that look like keys, in commits made before they were marked gitleaks:allow (./dev audit).
+2679bedd0dee83a1228a7248e8de623321a7b811:sidecar/internal/app/forwards_test.go:generic-api-key:51
+2679bedd0dee83a1228a7248e8de623321a7b811:e2e/tests/streams.spec.ts:generic-api-key:174
