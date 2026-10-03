@@ -16,6 +16,11 @@ import (
 // ErrNotInstalled means the host helper has never written a status: exposure control is not set up on this host.
 var ErrNotInstalled = errors.New("exposure control is not installed on this host (no status from mtx-portgate)")
 
+// ErrClosedOnHost means everything was closed on the host (mtx-portgate close-all) and the sidecar has not taken that
+// in yet (CloseAll): the helper opens nothing until it has.
+var ErrClosedOnHost = errors.New("everything was closed on the host (mtx-portgate close-all), and nothing opens until " +
+	"the sidecar has taken that in, which it does by itself within seconds: try again then")
+
 // Client is the sidecar's side: it writes desired.json into its own portgate directory and reads the status file the
 // helper writes (mounted read-only). It knows nothing the helper does not tell it: port ids and limits come from the
 // status.
@@ -148,10 +153,24 @@ func (c *Client) View() View {
 	return v
 }
 
+// ClosedOnHost reports a close-all on the host (mtx-portgate close-all) that the sidecar has not taken in yet. Until
+// CloseAll has written a desired state that carries it, the helper opens nothing, and Set refuses.
+func (c *Client) ClosedOnHost(st *Status) bool {
+	if st.ClosedAll == nil {
+		return false
+	}
+	d, err := c.Desired()
+	return err != nil || !takenIn(st, d)
+}
+
+func takenIn(st *Status, d Desired) bool {
+	return st.ClosedAll != nil && d.ClosedAll != nil && d.ClosedAll.Equal(*st.ClosedAll)
+}
+
 // Set opens port id manually as w, or closes the manual opening when w is nil, checked against the limits the helper
 // reports (the helper checks again against its own policy). It returns the desired state written.
 func (c *Client) Set(id string, w *Want) (Desired, error) {
-	return c.update(func(st *Status, m *Desired) error {
+	return c.update(false, func(st *Status, m *Desired) error {
 		if _, ok := st.Ports[id]; !ok {
 			return fmt.Errorf("unknown port %q", id)
 		}
@@ -169,24 +188,28 @@ func (c *Client) Set(id string, w *Want) (Desired, error) {
 	})
 }
 
-// CloseAll removes every manual opening and every automatic one (the caller switches the automatic rules off).
+// CloseAll removes every manual opening and every automatic one (the caller switches the automatic rules off). It
+// also takes in a close-all on the host.
 func (c *Client) CloseAll() (Desired, error) {
 	c.mu.Lock()
 	c.auto = nil
 	c.mu.Unlock()
-	return c.update(func(_ *Status, m *Desired) error {
+	return c.update(true, func(_ *Status, m *Desired) error {
 		m.Want = map[string]Want{}
 		return nil
 	})
 }
 
-// SetAuto replaces the automatic openings; desired.json changes only if the merge does.
+// SetAuto replaces the automatic openings; desired.json changes only if the merge does (and not at all while a
+// close-all on the host has not been taken in).
 func (c *Client) SetAuto(auto []AutoOpening) error {
 	c.mu.Lock()
 	c.auto = slices.Clone(auto)
 	c.mu.Unlock()
-	_, err := c.update(nil)
-	return err
+	if _, err := c.update(false, nil); !errors.Is(err, ErrClosedOnHost) {
+		return err
+	}
+	return nil
 }
 
 func policyOf(st *Status) Policy {
@@ -198,21 +221,35 @@ func policyOf(st *Status) Policy {
 }
 
 // update applies change (if any) to the manual openings, then writes desired.json as manual plus automatic,
-// dropping what has expired, when that differs from what is there. It returns the desired state.
-func (c *Client) update(change func(*Status, *Desired) error) (Desired, error) {
+// dropping what has expired or the policy no longer allows, when that differs from what is there. It returns the
+// desired state. While a close-all on the host has not been taken in, only closing (CloseAll, which takes it in)
+// writes anything.
+func (c *Client) update(closing bool, change func(*Status, *Desired) error) (Desired, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	st, err := c.Status()
 	if err != nil {
 		return Desired{}, err
 	}
+	cur, err := c.Desired()
+	if err != nil {
+		return Desired{}, err
+	}
+	if st.ClosedAll != nil && !closing && !takenIn(st, cur) {
+		return cur, ErrClosedOnHost
+	}
 	manual, fromFile, err := c.manual()
 	if err != nil {
 		return Desired{}, err
 	}
 	now := c.now()
-	expire(&manual, now)
-	if change != nil || !fromFile {
+	pol := policyOf(st)
+	// What has expired goes, and so does what the policy no longer allows (the operator tightened it): the helper
+	// would refuse the whole state over it.
+	kept, _ := pol.Allowed(manual, now)
+	dropped := len(kept.Want) != len(manual.Want)
+	manual = kept
+	if change != nil || !fromFile || dropped {
 		if change != nil {
 			if err := change(st, &manual); err != nil {
 				return Desired{}, err
@@ -222,24 +259,17 @@ func (c *Client) update(change func(*Status, *Desired) error) (Desired, error) {
 			return Desired{}, err
 		}
 	}
-	merged := merge(manual, c.auto, policyOf(st), now)
-	cur, err := c.Desired()
-	if err != nil {
-		return Desired{}, err
-	}
+	merged := merge(manual, c.auto, pol, now)
+	merged.ClosedAll = st.ClosedAll // the host's close-all, taken in now or before
 	if reflect.DeepEqual(cur.Want, merged.Want) && change == nil {
 		return cur, nil
 	}
-	merged.Rev = max(cur.Rev, st.Rev) + 1 // above anything the helper accepted, even after close-all or a lost file
-	return merged, WriteFileAtomic(c.desiredPath(), merged, 0o600)
-}
-
-func expire(d *Desired, now time.Time) {
-	for id, w := range d.Want {
-		if w.Until != nil && !w.Until.After(now) {
-			delete(d.Want, id)
-		}
+	base := max(cur.Rev, st.Rev) // above anything the helper accepted, even after close-all or a lost file
+	if base-st.Rev >= MaxRevStep {
+		base = st.Rev // a rev the helper refuses as a jump (not this sidecar's counting): count on from the helper's
 	}
+	merged.Rev = base + 1
+	return merged, WriteFileAtomic(c.desiredPath(), merged, 0o600)
 }
 
 // merge combines manual and automatic openings, port by port. Opening to anyone subsumes the named sources and
@@ -247,8 +277,10 @@ func expire(d *Desired, now time.Time) {
 // otherwise the sources are the union (manual first, automatic in the order given, at most the policy's maximum)
 // until the latest of them. The helper keeps one expiry per port, so a source can outlive its own there while the
 // sidecar runs; the sidecar recomputes often and drops it, and the helper's expiry is only the backstop for a dead
-// sidecar. A port whose merge the policy would refuse falls back to its manual opening alone, so an automatic
-// opening can never make the helper refuse the whole state.
+// sidecar. Each automatic opening is fitted to the policy on its own (an expiry beyond its longest is shortened, an
+// opening it refuses is left out), so one that does not fit costs no other opening on its port; a port whose merge
+// the policy would still refuse falls back to its manual opening alone, so an automatic opening can never make the
+// helper refuse the whole state.
 func merge(manual Desired, auto []AutoOpening, pol Policy, now time.Time) Desired {
 	type acc struct {
 		anyone      bool
@@ -281,15 +313,13 @@ func merge(manual Desired, auto []AutoOpening, pol Policy, now time.Time) Desire
 		}
 	}
 	for _, o := range auto {
-		if !o.Until.After(now) {
+		anyone := o.Source == ""
+		until := clip(o.Until, pol.ttl(anyone), now)
+		if _, known := pol.Ports[o.Port]; !known || !until.After(now) || (anyone && !pol.AllowAnySource) {
 			continue
 		}
-		if _, known := pol.Ports[o.Port]; !known {
-			continue
-		}
-		until := o.Until
-		a := get(o.Port)
-		if o.Source == "" {
+		if anyone {
+			a := get(o.Port)
 			if !a.anyone {
 				a.anyone, a.anyoneUntil = true, &until
 			} else if a.anyoneUntil != nil {
@@ -298,7 +328,11 @@ func merge(manual Desired, auto []AutoOpening, pol Policy, now time.Time) Desire
 			continue
 		}
 		src, err := ParseSource(o.Source)
-		if err != nil || slices.Contains(a.sources, src.String()) || len(a.sources) >= pol.MaxSources {
+		if err != nil || pol.checkWidth(src.String()) != nil {
+			continue
+		}
+		a := get(o.Port)
+		if slices.Contains(a.sources, src.String()) || len(a.sources) >= pol.MaxSources {
 			continue
 		}
 		a.sources = append(a.sources, src.String())
@@ -322,6 +356,16 @@ func merge(manual Desired, auto []AutoOpening, pol Policy, now time.Time) Desire
 		}
 	}
 	return out
+}
+
+// clip shortens an automatic opening's expiry to the longest the policy allows (a remembered encoder's 30 days under
+// a shorter maxTTL), in steps of up to an hour, so that the shortened expiry does not rewrite desired.json on every
+// recompute.
+func clip(until time.Time, ttl time.Duration, now time.Time) time.Time {
+	if limit := now.Add(ttl).Truncate(min(ttl/8, time.Hour)); until.After(limit) {
+		return limit
+	}
+	return until
 }
 
 // Watch streams the view to publish whenever it changes, checking every interval, until ctx ends.

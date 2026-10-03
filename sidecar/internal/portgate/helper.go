@@ -26,6 +26,11 @@ type Helper struct {
 	Log    *slog.Logger
 }
 
+// MaxRevStep is how far past the accepted rev a desired state may jump. The sidecar counts up by one per write, so a
+// bigger jump is not its counting, and refusing it keeps a rev near the int64 maximum (which no later rev could
+// pass) from ever being accepted.
+const MaxRevStep = 1 << 32
+
 // Files in Policy.StateDir.
 const (
 	StatusFile   = "status.json"
@@ -85,16 +90,26 @@ func (h *Helper) applyOnce(ctx context.Context) (Status, bool, error) {
 
 	var refusal string
 	var refused int64
+	refuse := func(rev int64, why string) {
+		refusal = fmt.Sprintf("desired state rev %d refused: %s", rev, strings.ReplaceAll(why, "\n", "; "))
+		refused = rev
+	}
 	req, err := ReadRequest(h.Policy.Desired)
 	switch {
 	case errors.Is(err, ErrNoRequest):
 	case err != nil:
 		refusal = "desired state refused: " + err.Error()
+	case req.Rev > accepted.Rev && req.Rev-accepted.Rev > MaxRevStep:
+		refuse(req.Rev, fmt.Sprintf("it jumps more than %d past the accepted rev %d", int64(MaxRevStep), accepted.Rev))
+	case req.Rev > accepted.Rev && prev.ClosedAll != nil && (req.ClosedAll == nil || !req.ClosedAll.Equal(*prev.ClosedAll)):
+		// The sidecar's routine renewals must not undo the host's close-all: only a state written after the sidecar
+		// has taken it in (closed its manual openings, switched its automatic rules off) opens anything again.
+		refuse(req.Rev, fmt.Sprintf("everything was closed on the host (mtx-portgate close-all) at %s, and nothing "+
+			"opens until the sidecar has taken that in", prev.ClosedAll.UTC().Format(time.RFC3339)))
 	case req.Rev > accepted.Rev:
 		checked, err := h.Policy.Check(req, now)
 		if err != nil {
-			refusal = fmt.Sprintf("desired state rev %d refused: %s", req.Rev, strings.ReplaceAll(err.Error(), "\n", "; "))
-			refused = req.Rev
+			refuse(req.Rev, err.Error())
 			break
 		}
 		accepted = checked
@@ -103,11 +118,18 @@ func (h *Helper) applyOnce(ctx context.Context) (Status, bool, error) {
 			return Status{}, false, err
 		}
 		h.log().Info("accepted desired state", "rev", accepted.Rev, "ports", len(accepted.Want))
+	case req.Rev < accepted.Rev:
+		refusal = fmt.Sprintf("desired state rev %d ignored: rev %d was accepted before, and only a newer one applies", req.Rev, accepted.Rev)
+	}
+	// The policy is read on every run: what it no longer allows (the operator tightened it) closes.
+	allowed, err := h.Policy.Allowed(accepted, now)
+	if err != nil {
+		refusal = joinErr(refusal, "no longer within the policy, closed: "+strings.ReplaceAll(err.Error(), "\n", "; "))
 	}
 	if refusal != "" {
 		h.log().Warn(refusal)
 	}
-	st := h.converge(ctx, accepted, prev, now)
+	st := h.converge(ctx, allowed, prev, now)
 	st.ClosedAll = prev.ClosedAll
 	st.Error = joinErr(refusal, st.Error)
 	if err := h.writeJSON(StatusFile, st, 0o644); err != nil {
@@ -117,8 +139,8 @@ func (h *Helper) applyOnce(ctx context.Context) (Status, bool, error) {
 	return st, err == nil && next.Rev > accepted.Rev && next.Rev != refused, nil
 }
 
-// CloseAll deletes every rule portgate owns and keeps them closed until the sidecar writes a newer desired state. It
-// needs nothing from the sidecar.
+// CloseAll deletes every rule portgate owns. It needs nothing from the sidecar, and it holds: nothing opens again
+// until the sidecar has taken it in, which it does by itself as for Close all on the Exposure page (Desired.ClosedAll).
 func (h *Helper) CloseAll(ctx context.Context) (Status, error) {
 	unlock, err := h.lock()
 	if err != nil {
@@ -127,7 +149,7 @@ func (h *Helper) CloseAll(ctx context.Context) (Status, error) {
 	defer unlock()
 	prev := h.readStatus()
 	accepted := h.readAccepted()
-	if req, err := ReadRequest(h.Policy.Desired); err == nil && req.Rev > accepted.Rev {
+	if req, err := ReadRequest(h.Policy.Desired); err == nil && req.Rev > accepted.Rev && req.Rev-accepted.Rev <= MaxRevStep {
 		accepted.Rev = req.Rev // the pending request must not reopen anything either
 	}
 	accepted.Want = map[string]Want{}
@@ -140,6 +162,9 @@ func (h *Helper) CloseAll(ctx context.Context) (Status, error) {
 	st.ClosedAll = &now
 	return st, h.writeJSON(StatusFile, st, 0o644)
 }
+
+// notInSync starts the error of a port the verify command did not confirm: the next run asks again.
+const notInSync = "firewall not confirmed in sync: "
 
 // converge makes the owned rules match what accepted still wants at now, then waits for the firewall that matters.
 func (h *Helper) converge(ctx context.Context, accepted Desired, prev Status, now time.Time) Status {
@@ -204,13 +229,13 @@ func (h *Helper) converge(ctx context.Context, accepted Desired, prev Status, no
 		h.log().Info("opened", "rule", r.String())
 	}
 
-	retry := false
+	retry := false // a port the last run could not confirm; other errors (an operator's rule in the way) recur anyway
 	for _, ps := range prev.Ports {
-		retry = retry || ps.State == StateError
+		retry = retry || (ps.State == StateError && strings.HasPrefix(ps.Error, notInSync))
 	}
 	if (changed || retry) && h.Policy.Verify != nil {
 		if err := h.verify(ctx); err != nil {
-			msg := "firewall not confirmed in sync: " + err.Error()
+			msg := notInSync + err.Error()
 			st.Error = joinErr(st.Error, msg)
 			for id, ps := range st.Ports {
 				if ps.State == StateOpen {

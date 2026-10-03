@@ -4,7 +4,8 @@
 // and adds and deletes only firewall rules marked mtx-portgate:.
 //
 //	mtx-portgate [-policy /etc/mtx-portgate/policy.json] apply|reconcile   converge to the desired state
-//	mtx-portgate close-all                                              close everything now (needs no sidecar)
+//	mtx-portgate close-all                                              close everything now (needs no sidecar); nothing
+//	                                                                    opens again until the sidecar has taken it in
 //	mtx-portgate status                                                 print the last status
 //	mtx-portgate check-policy                                           validate the policy file
 //	mtx-portgate -every 1s apply                                        loop, for test stacks without systemd

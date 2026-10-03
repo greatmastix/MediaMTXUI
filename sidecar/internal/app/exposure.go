@@ -79,6 +79,7 @@ func (s *Server) exposureOpen(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid", "Give a duration in hours, or permanent.")
 		return
 	}
+	s.followHostCloseAll(r.Context()) // an admin opening after a close-all on the host opens on top of it
 	d, err := s.d.Exposure.Set(id, &want)
 	if !s.exposureWritten(w, err) {
 		return
@@ -90,6 +91,7 @@ func (s *Server) exposureOpen(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) exposureClose(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	s.followHostCloseAll(r.Context())
 	d, err := s.d.Exposure.Set(id, nil)
 	if !s.exposureWritten(w, err) {
 		return
@@ -100,7 +102,7 @@ func (s *Server) exposureClose(w http.ResponseWriter, r *http.Request) {
 }
 
 // exposureCloseAll closes everything: the manual openings, and the automatic ones with their rules switched off (they
-// would reopen within seconds otherwise).
+// would reopen within seconds otherwise). It also takes in a close-all on the host.
 func (s *Server) exposureCloseAll(w http.ResponseWriter, r *http.Request) {
 	if err := s.setAutoRules(r.Context(), AutoRules{}); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "Cannot switch the automatic rules off.")
@@ -120,6 +122,9 @@ func (s *Server) exposureWritten(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, portgate.ErrNotInstalled):
 		writeError(w, http.StatusServiceUnavailable, "not_installed",
 			"Exposure control is not installed on this host: open the stream ports in your firewall by hand.")
+	case errors.Is(err, portgate.ErrClosedOnHost):
+		writeError(w, http.StatusConflict, "closed_on_host",
+			"Everything was just closed on the host (mtx-portgate close-all): try again in a few seconds.")
 	case err != nil:
 		writeError(w, http.StatusBadRequest, "invalid", err.Error())
 	default:

@@ -309,13 +309,20 @@ func TestCloseAllWorksWithoutTheSidecar(t *testing.T) {
 	if f.ours() != "" || st.ClosedAll == nil || st.Ports["rtsp"].State != StateClosed {
 		t.Fatalf("status %+v rules %s", st, f.ours())
 	}
-	// The desired state that was open stays closed on the next runs...
+	// The desired state that was open stays closed on the next runs, and so does a newer one written without taking
+	// the close-all in (the running sidecar's routine renewals)...
 	if st := f.apply(); f.ours() != "" || st.ClosedAll == nil {
 		t.Fatalf("reopened: %s", f.ours())
 	}
-	// ...until the sidecar asks again.
 	f.want(2, map[string]Want{"rtsp": {Until: f.in(time.Hour)}})
-	if st := f.apply(); f.ours() == "" || st.ClosedAll != nil {
+	if st := f.apply(); f.ours() != "" || st.ClosedAll == nil || !strings.Contains(st.Error, "closed on the host") {
+		t.Fatalf("reopened by a renewal: %+v %s", st, f.ours())
+	}
+	// ...until the sidecar has taken it in.
+	if err := WriteFileAtomic(f.h.Policy.Desired, Desired{Rev: 3, Want: map[string]Want{"rtsp": {Until: f.in(time.Hour)}}, ClosedAll: st.ClosedAll}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st := f.apply(); f.ours() == "" || st.ClosedAll != nil || st.Error != "" {
 		t.Fatalf("status %+v", st)
 	}
 }
@@ -448,17 +455,23 @@ func TestClientAndHelperTogether(t *testing.T) {
 		t.Fatalf("view %+v", v)
 	}
 
-	// The host's close-all wins over the sidecar's file; the sidecar's next change gets a higher rev and applies.
+	// The host's close-all wins over the sidecar's file: nothing opens until the sidecar has taken it in (CloseAll),
+	// and then its changes apply again.
 	if _, err := f.h.CloseAll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := c.Set("srt", &Want{Sources: []string{"203.0.113.7"}, Until: f.in(time.Hour)}); !errors.Is(err, ErrClosedOnHost) {
+		t.Fatalf("opened before the close-all was taken in: %v", err)
+	}
+	if d, err := c.CloseAll(); err != nil || d.Rev != 2 || len(d.Want) != 0 || d.ClosedAll == nil {
+		t.Fatalf("taking it in: %+v %v", d, err)
+	}
 	d, err = c.Set("srt", &Want{Sources: []string{"203.0.113.7"}, Until: f.in(time.Hour)})
-	if err != nil || d.Rev != 2 || len(d.Want) != 2 {
+	if err != nil || d.Rev != 3 || len(d.Want) != 1 {
 		t.Fatalf("after close-all: %+v %v", d, err)
 	}
-	f.apply()
-	if f.ours() == "" {
-		t.Fatal("the sidecar could not reopen after close-all")
+	if st := f.apply(); f.ours() == "" || st.ClosedAll != nil {
+		t.Fatalf("the sidecar could not reopen after taking close-all in: %+v", st)
 	}
 	if _, err := c.CloseAll(); err != nil {
 		t.Fatal(err)

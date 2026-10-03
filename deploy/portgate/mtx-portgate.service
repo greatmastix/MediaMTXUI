@@ -5,6 +5,9 @@
 Description=Apply MediaMTX UI exposure requests (mtx-portgate)
 After=network-online.target ufw.service
 Wants=network-online.target
+# No start limit: systemd's default (5 starts in 10 s) would fail mtx-portgate.path for good on a burst of requests,
+# leaving only the timer to apply them. Runs never overlap, and a run applies the requests written while it runs.
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot

@@ -53,9 +53,16 @@ func ExecRunner(ctx context.Context, argv ...string) (string, error) {
 
 // UFW drives ufw: `ufw allow proto P from S to any port N comment 'mtx-portgate:<id>'`, listed back through
 // `ufw show added`. A cloud firewall synced from ufw then follows them by itself.
+//
+// ufw keeps one rule per port, protocol and source: adding a rule that differs from an existing one only in action
+// or comment replaces that one in place ("Rule updated"). So the driver never adds a rule where one of the operator's
+// own has the same port, protocol and source (a deny turned into portgate's allow, or a permanent allow portgate
+// would delete at expiry); it reports that rule instead.
 type UFW struct {
 	Run Runner
 	Bin string // "ufw" unless set
+
+	others map[Rule]string // the operator's rules a rule of portgate's would replace, as the last listing found them
 }
 
 // Name implements Driver.
@@ -76,8 +83,12 @@ func (u *UFW) Rules(ctx context.Context) ([]Rule, error) {
 		return nil, err
 	}
 	var rules []Rule
+	others := map[Rule]string{}
 	for _, line := range strings.Split(out, "\n") {
 		if !strings.Contains(line, "'"+CommentPrefix) {
+			if l, err := readUFWLine(line); err == nil && l.shaped {
+				others[l.rule] = strings.TrimSpace(line)
+			}
 			continue
 		}
 		r, err := parseUFWRule(line)
@@ -86,6 +97,7 @@ func (u *UFW) Rules(ctx context.Context) ([]Rule, error) {
 		}
 		rules = append(rules, r)
 	}
+	u.others = others
 	return rules, nil
 }
 
@@ -97,75 +109,140 @@ func (u *UFW) spec(r Rule) []string {
 	return []string{"proto", r.Proto, "from", src, "to", "any", "port", strconv.Itoa(r.Port), "comment", CommentPrefix + r.ID}
 }
 
-// Add implements Driver.
+// Add implements Driver. It refuses a rule that would replace one of the operator's (as the last Rules found them;
+// it lists them first if Rules has not run).
 func (u *UFW) Add(ctx context.Context, r Rule) error {
+	if u.others == nil {
+		if _, err := u.Rules(ctx); err != nil {
+			return err
+		}
+	}
+	key := r
+	key.ID = ""
+	if line, ok := u.others[key]; ok {
+		return fmt.Errorf("a ufw rule of the operator's has this port, protocol and source (%s), and adding "+
+			"portgate's would replace it: left alone", line)
+	}
 	_, err := u.run(ctx, append([]string{"allow"}, u.spec(r)...)...)
 	return err
 }
 
-// Delete implements Driver.
+// Delete implements Driver. ufw reports a rule it did not find without failing; that is an error here, so a rule it
+// keeps is never reported closed.
 func (u *UFW) Delete(ctx context.Context, r Rule) error {
-	_, err := u.run(ctx, append([]string{"delete", "allow"}, u.spec(r)...)...)
+	out, err := u.run(ctx, append([]string{"delete", "allow"}, u.spec(r)...)...)
+	if err == nil && strings.Contains(out, "Could not delete non-existent rule") && !strings.Contains(out, "Rule deleted") {
+		err = errors.New("ufw has no such rule to delete")
+	}
 	return err
 }
 
-// parseUFWRule reads a `ufw show added` line in either form ufw prints:
+// parseUFWRule reads a rule of portgate's from a `ufw show added` line, in either form ufw prints:
 //
 //	ufw allow from 192.0.2.1 to any port 8554 proto tcp comment 'mtx-portgate:rtsp'
 //	ufw allow 8189/udp comment 'mtx-portgate:webrtc'
+//
+// The source stays as ufw prints it, so deleting the rule names it the way ufw keeps it.
 func parseUFWRule(line string) (Rule, error) {
-	head, comment, ok := strings.Cut(strings.TrimSpace(line), " comment '")
-	if !ok || !strings.HasSuffix(comment, "'") {
+	l, err := readUFWLine(line)
+	switch {
+	case err != nil:
+		return Rule{}, err
+	case l.comment == "":
 		return Rule{}, errors.New("no comment")
-	}
-	r := Rule{ID: strings.TrimSuffix(strings.TrimPrefix(comment, CommentPrefix), "'")}
-	f := strings.Fields(head)
-	if len(f) < 3 || f[0] != "ufw" || f[1] != "allow" {
+	case l.action != "allow":
 		return Rule{}, errors.New("not an allow rule")
+	case !l.shaped:
+		return Rule{}, errors.New("not a rule portgate writes")
 	}
-	f = f[2:]
-	if len(f) == 1 { // 8189/udp: from anywhere
-		port, proto, ok := strings.Cut(f[0], "/")
-		if !ok {
-			return Rule{}, errors.New("a port without protocol")
+	r := l.rule
+	r.ID = strings.TrimPrefix(l.comment, CommentPrefix)
+	return r, r.valid()
+}
+
+// ufwLine is one `ufw show added` line: its action and comment, and the rule it is in portgate's terms (without an
+// ID) when it has the shape of one: incoming, on any interface, from any address or one source, to any address, to one
+// port with a protocol. That is everything ufw compares, apart from action and comment, to tell whether two rules
+// are the same.
+type ufwLine struct {
+	action  string // allow, deny, reject or limit
+	comment string
+	rule    Rule
+	shaped  bool
+}
+
+// readUFWLine reads a `ufw show added` line. A rule of another shape (outgoing, routed, on an interface, for an
+// application, from a source port, to an address or several ports) is read with shaped false.
+func readUFWLine(line string) (ufwLine, error) {
+	head, comment, ok := strings.Cut(strings.TrimSpace(line), " comment '")
+	var l ufwLine
+	if ok {
+		if !strings.HasSuffix(comment, "'") {
+			return l, errors.New("a comment without its closing quote")
 		}
-		n, err := strconv.Atoi(port)
-		if err != nil {
-			return Rule{}, err
-		}
-		r.Port, r.Proto = n, proto
-		return r, r.valid()
+		l.comment = strings.TrimSuffix(comment, "'")
 	}
-	for i := 0; i+1 < len(f); i += 2 {
-		switch v := f[i+1]; f[i] {
+	f := strings.Fields(head)
+	if len(f) < 3 || f[0] != "ufw" {
+		return l, errors.New("not a ufw rule")
+	}
+	switch f[1] {
+	case "allow", "deny", "reject", "limit":
+		l.action = f[1]
+		l.rule, l.shaped = ufwShape(f[2:])
+	case "route": // forwarded traffic: never the same as an incoming rule
+	default:
+		return l, fmt.Errorf("unexpected %q", f[1])
+	}
+	return l, nil
+}
+
+// ufwShape reads what follows a rule's action as portgate's kind of rule, if it is one.
+func ufwShape(f []string) (Rule, bool) {
+	if len(f) > 0 && (f[0] == "log" || f[0] == "log-all") {
+		f = f[1:] // ufw does not compare logging either
+	}
+	if len(f) == 1 { // 8189/udp: from anywhere to any address (not: any protocol, several ports, an application)
+		port, proto, _ := strings.Cut(f[0], "/")
+		n, ok := portNumber(port)
+		return Rule{Proto: proto, Port: n}, ok && (proto == "tcp" || proto == "udp")
+	}
+	if len(f)%2 != 0 {
+		return Rule{}, false // in on <interface>, out, an application name with spaces
+	}
+	r, last, toAny := Rule{}, "", false
+	for i := 0; i < len(f); i += 2 {
+		switch k, v := f[i], f[i+1]; k {
 		case "from":
 			if v != "any" {
-				p, err := ParseSource(v)
+				p, err := parsePrefix(v)
 				if err != nil {
-					return Rule{}, err
+					return Rule{}, false
 				}
 				r.Source = p.String()
 			}
+			last = k
 		case "to":
-			if v != "any" {
-				return Rule{}, errors.New("a destination address")
-			}
+			toAny, last = v == "any", k
 		case "port":
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				return Rule{}, err
+			n, ok := portNumber(v)
+			if last != "to" || !ok {
+				return Rule{}, false // a source port, or several ports
 			}
 			r.Port = n
 		case "proto":
 			r.Proto = v
 		default:
-			return Rule{}, fmt.Errorf("unexpected %q", f[i])
+			return Rule{}, false // in on, out on, app
 		}
 	}
-	if len(f)%2 != 0 {
-		return Rule{}, errors.New("an odd number of words")
-	}
-	return r, r.valid()
+	return r, toAny && r.Port > 0 && (r.Proto == "tcp" || r.Proto == "udp")
+}
+
+// portNumber reads one port (not a list or a range).
+func portNumber(s string) (int, bool) {
+	n, err := strconv.Atoi(s)
+	return n, err == nil && n > 0
 }
 
 func (r Rule) valid() error {
@@ -204,7 +281,18 @@ func (f *FakeUFW) Run(_ context.Context, argv ...string) (string, error) {
 		if slices.Contains(lines, line) {
 			return "Skipping adding existing rule\n", nil
 		}
+		// Like ufw, a rule that differs from an existing one only in action or comment replaces it in place.
+		added, _ := readUFWLine(line)
+		i := slices.IndexFunc(lines, func(l string) bool {
+			other, err := readUFWLine(l)
+			return err == nil && other.shaped && other.rule == added.rule
+		})
+		if i >= 0 {
+			lines[i] = line
+			return "Rule updated\n", f.write(lines)
+		}
 		lines = append(lines, line)
+		return "Rule added\n", f.write(lines)
 	case len(args) == 12 && args[0] == "delete" && args[1] == "allow":
 		line, err := fakeLine(args[2:])
 		if err != nil {
@@ -214,11 +302,13 @@ func (f *FakeUFW) Run(_ context.Context, argv ...string) (string, error) {
 		if i < 0 {
 			return "Could not delete non-existent rule\n", nil
 		}
-		lines = slices.Delete(lines, i, i+1)
-	default:
-		return "", fmt.Errorf("fake ufw: unsupported %q", args)
+		return "Rule deleted\n", f.write(slices.Delete(lines, i, i+1))
 	}
-	return "Rule updated\n", os.WriteFile(f.File, []byte(strings.Join(lines, "\n")+"\n"), 0o600) //nolint:gosec // the test file named in the policy
+	return "", fmt.Errorf("fake ufw: unsupported %q", args)
+}
+
+func (f *FakeUFW) write(lines []string) error {
+	return os.WriteFile(f.File, []byte(strings.Join(lines, "\n")+"\n"), 0o600) //nolint:gosec // the test file named in the policy
 }
 
 // fakeLine formats `proto P from S to any port N comment C` the way `ufw show added` prints the rule.

@@ -35,5 +35,5 @@ sed "s|/var/lib/mtx-portgate-requests|$requests|" mtx-portgate.path >"$tmp/mtx-p
 install -m 644 -o root -g root "$tmp/mtx-portgate.path" /etc/systemd/system/mtx-portgate.path
 systemctl daemon-reload
 systemctl enable --now mtx-portgate.path mtx-portgate.timer
-systemctl start mtx-portgate.service # first status: every port closed unless a request says otherwise
+systemctl start mtx-portgate.service # first status: every port closed until the sidecar asks
 /usr/local/sbin/mtx-portgate status

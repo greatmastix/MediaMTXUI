@@ -109,8 +109,8 @@ func (p *Policy) check() error {
 	return errors.Join(errs...)
 }
 
-// Check validates a desired state against the policy and returns it normalized (sorted canonical sources). Every
-// problem is reported, each naming its port.
+// Check validates a desired state against the policy and returns it normalized (sorted canonical sources, expiries
+// in UTC, so that two wants compare equal when they mean the same). Every problem is reported, each naming its port.
 func (p *Policy) Check(d Desired, now time.Time) (Desired, error) {
 	var errs []error
 	out := Desired{Rev: d.Rev, Want: map[string]Want{}}
@@ -118,43 +118,93 @@ func (p *Policy) Check(d Desired, now time.Time) (Desired, error) {
 		errs = append(errs, errors.New("rev must be positive"))
 	}
 	for id, w := range d.Want {
-		if _, ok := p.Ports[id]; !ok {
-			errs = append(errs, fmt.Errorf("%s: unknown port id", id))
-			continue
-		}
-		srcs, err := normalSources(w.Sources)
+		checked, err := p.checkWant(id, w, now)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", id, err))
-			continue
+			errs = append(errs, err)
 		}
-		if len(srcs) > p.MaxSources {
-			errs = append(errs, fmt.Errorf("%s: %d sources, at most %d", id, len(srcs), p.MaxSources))
+		if checked != nil {
+			out.Want[id] = *checked
 		}
-		for _, s := range srcs {
-			pf, _ := ParseSource(s)
-			minBits := p.MinPrefixV4
-			if pf.Addr().Is6() {
-				minBits = p.MinPrefixV6
-			}
-			if pf.Bits() < minBits {
-				errs = append(errs, fmt.Errorf("%s: %s is wider than /%d", id, s, minBits))
-			}
-		}
-		anywhere := len(srcs) == 0
-		if anywhere && !p.AllowAnySource {
-			errs = append(errs, fmt.Errorf("%s: opening to anywhere is not allowed; name the sources", id))
-		}
-		ttl := time.Duration(p.MaxTTL)
-		if anywhere {
-			ttl = time.Duration(p.MaxTTLAnySource)
-		}
-		switch {
-		case w.Until == nil && (!p.PermanentOK || anywhere):
-			errs = append(errs, fmt.Errorf("%s: an expiry is required", id))
-		case w.Until != nil && w.Until.Sub(now) > ttl:
-			errs = append(errs, fmt.Errorf("%s: open for at most %s", id, ttl))
-		}
-		out.Want[id] = Want{Sources: srcs, Until: w.Until}
 	}
 	return out, errors.Join(errs...)
+}
+
+// Allowed is the part of an accepted state the policy still allows at now (the operator may have tightened it since
+// the state was accepted), and why it refuses the rest. What it refuses is left out, so it closes.
+func (p *Policy) Allowed(d Desired, now time.Time) (Desired, error) {
+	var errs []error
+	out := Desired{Rev: d.Rev, Want: map[string]Want{}}
+	for id, w := range d.Want {
+		if _, ok := p.Ports[id]; !ok || (w.Until != nil && !w.Until.After(now)) {
+			continue // a port the policy no longer has, or expired: closes without a word
+		}
+		checked, err := p.checkWant(id, w, now)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		out.Want[id] = *checked
+	}
+	return out, errors.Join(errs...)
+}
+
+// checkWant validates one port's want and returns it normalized (nil when it cannot be read at all) with every
+// problem, each naming the port.
+func (p *Policy) checkWant(id string, w Want, now time.Time) (*Want, error) {
+	if _, ok := p.Ports[id]; !ok {
+		return nil, fmt.Errorf("%s: unknown port id", id)
+	}
+	srcs, err := normalSources(w.Sources)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", id, err)
+	}
+	var errs []error
+	if len(srcs) > p.MaxSources {
+		errs = append(errs, fmt.Errorf("%s: %d sources, at most %d", id, len(srcs), p.MaxSources))
+	}
+	for _, s := range srcs {
+		if err := p.checkWidth(s); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", id, err))
+		}
+	}
+	anywhere := len(srcs) == 0
+	if anywhere && !p.AllowAnySource {
+		errs = append(errs, fmt.Errorf("%s: opening to anywhere is not allowed; name the sources", id))
+	}
+	switch ttl := p.ttl(anywhere); {
+	case w.Until == nil && (!p.PermanentOK || anywhere):
+		errs = append(errs, fmt.Errorf("%s: an expiry is required", id))
+	case w.Until != nil && w.Until.Sub(now) > ttl:
+		errs = append(errs, fmt.Errorf("%s: open for at most %s", id, ttl))
+	}
+	out := Want{Sources: srcs}
+	if w.Until != nil {
+		u := w.Until.UTC()
+		out.Until = &u
+	}
+	return &out, errors.Join(errs...)
+}
+
+// checkWidth refuses a canonical source wider than the policy allows for its address family.
+func (p *Policy) checkWidth(s string) error {
+	pf, err := ParseSource(s)
+	if err != nil {
+		return err
+	}
+	minBits := p.MinPrefixV4
+	if pf.Addr().Is6() {
+		minBits = p.MinPrefixV6
+	}
+	if pf.Bits() < minBits {
+		return fmt.Errorf("%s is wider than /%d", s, minBits)
+	}
+	return nil
+}
+
+// ttl is the longest an opening may last, to anywhere or to named sources.
+func (p *Policy) ttl(anywhere bool) time.Duration {
+	if anywhere {
+		return time.Duration(p.MaxTTLAnySource)
+	}
+	return time.Duration(p.MaxTTL)
 }

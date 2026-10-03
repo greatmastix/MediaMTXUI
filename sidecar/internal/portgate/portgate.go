@@ -29,11 +29,16 @@ const (
 // MaxRequest caps the desired-state file the helper reads.
 const MaxRequest = 8 << 10
 
-// Desired is the sidecar's complete wish, written to desired.json. Rev grows with every write; the helper applies a
-// file only when its Rev is higher than the last one it accepted, so an old file cannot be replayed.
+// Desired is the sidecar's complete wish, written to desired.json. Rev grows by one with every write; the helper
+// applies a file only when its Rev is higher than the last one it accepted (by at most MaxRevStep), so an old file
+// cannot be replayed.
 type Desired struct {
 	Rev  int64           `json:"rev"`
 	Want map[string]Want `json:"want"`
+	// ClosedAll is the host's close-all (Status.ClosedAll) this state has taken in: the sidecar sets it once it has
+	// closed its manual openings and switched its automatic rules off after it. Until a state carries it, the helper
+	// opens nothing.
+	ClosedAll *time.Time `json:"closedAll,omitempty"`
 }
 
 // Want opens one port. No sources means anywhere; no Until means no expiry (only where the policy allows either).
@@ -51,7 +56,8 @@ type Status struct {
 	Limits  Limits                `json:"limits"`
 	// Error is why the latest desired state was refused, or why the helper could not converge; empty when all is well.
 	Error string `json:"error,omitempty"`
-	// ClosedAll is set by close-all: every port is closed until the sidecar writes a newer desired state.
+	// ClosedAll is set by close-all on the host: every port stays closed until the sidecar has taken it in (a newer
+	// desired state carrying the same time).
 	ClosedAll *time.Time `json:"closedAll,omitempty"`
 }
 
@@ -100,8 +106,22 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,15}$`)
 
-// ParseSource checks one source and returns it as a prefix: a bare address becomes /32 or /128.
+// ParseSource checks one source and returns it as a canonical prefix: a bare address becomes /32 or /128, and an
+// IPv4-mapped IPv6 one (::ffff:192.0.2.0/120) the IPv4 prefix it means (192.0.2.0/24), so the policy's IPv4 limits
+// apply to it and ufw keeps the rule in the form portgate reads back.
 func ParseSource(s string) (netip.Prefix, error) {
+	p, err := parsePrefix(s)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	if a := p.Addr(); a.Is4In6() {
+		p = netip.PrefixFrom(a.Unmap(), p.Bits()-96) // at least 96: a shorter one has host bits in the ::ffff
+	}
+	return p, nil
+}
+
+// parsePrefix checks one source as written, without making it canonical: a bare address becomes /32 or /128.
+func parsePrefix(s string) (netip.Prefix, error) {
 	if p, err := netip.ParsePrefix(s); err == nil {
 		if p.Masked() != p {
 			return netip.Prefix{}, fmt.Errorf("%s has host bits set (did you mean %s?)", s, p.Masked())
@@ -112,7 +132,6 @@ func ParseSource(s string) (netip.Prefix, error) {
 	if err != nil || a.Zone() != "" {
 		return netip.Prefix{}, fmt.Errorf("%q is not an address or CIDR", s)
 	}
-	a = a.Unmap()
 	return netip.PrefixFrom(a, a.BitLen()), nil
 }
 
