@@ -39,7 +39,10 @@ Then continue with [First steps](first-steps.md).
 
 ## What it does
 
-1. Checks the machine: Linux, run as root, an architecture with an image (amd64, arm64, armv7).
+1. Checks the machine: Linux, run as root, an architecture with an image (amd64, arm64, armv7), and its resources.
+   Below 1 GB of memory or 5 GB of free disk it stops; below 2 GB of memory, with little memory free right now, or
+   below 25 GB of free disk it warns and asks. A small machine without swap gets the offer of a 2 GB swap file
+   ([why](before-you-start.md#cpu-and-memory)).
 2. Installs `curl` and Docker with the Compose plugin if they are missing, with Docker's own install script
    ([Install Docker](install-docker.md)), and starts Docker on boot.
 3. Asks the questions above, and refuses if ports it needs (80 and 443 or 8080, 1935, 8554) are in use already.
@@ -84,6 +87,7 @@ curl -fsSL https://github.com/greatmastix/MediaMTXUI/releases/latest/download/in
 | `--dir PATH` | Another install folder than `/opt/mediamtx-ui` |
 | `--version v1.2.3` | A particular release instead of the newest |
 | `--yes` | No questions: take the defaults, fail where there is none |
+| `--skip-checks` | Install even where memory or disk are below the minimums |
 
 ## Read it first
 

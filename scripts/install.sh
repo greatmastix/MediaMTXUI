@@ -13,6 +13,7 @@
 #   --dir PATH          the install folder (default /opt/mediamtx-ui)
 #   --version vX.Y.Z    a particular release instead of the newest
 #   --yes               no questions: take the defaults, or fail where there is none
+#   --skip-checks       install even where memory or disk are below the minimums
 #   --help
 set -euo pipefail
 
@@ -22,7 +23,7 @@ main() {
 
 REPO=greatmastix/MediaMTXUI
 DIR=/opt/mediamtx-ui
-MODE="" DOMAIN="" EMAIL="" STAGING="" LAN="" VERSION="" YES=""
+MODE="" DOMAIN="" EMAIL="" STAGING="" LAN="" VERSION="" YES="" SKIP_CHECKS=""
 # MTXUI_INSTALL_BASE: where the release files come from (tests point it at a checkout's files).
 BASE=${MTXUI_INSTALL_BASE:-}
 
@@ -46,6 +47,7 @@ Installs MediaMTX UI, or upgrades an existing install. Without options it asks.
   --dir PATH          the install folder (default /opt/mediamtx-ui)
   --version vX.Y.Z    a particular release instead of the newest
   --yes               no questions: take the defaults, or fail where there is none
+  --skip-checks       install even where memory or disk are below the minimums
 EOF
 }
 
@@ -76,6 +78,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --yes | -y) YES=1 ;;
+    --skip-checks) SKIP_CHECKS=1 ;;
     --help | -h)
       usage
       exit 0
@@ -130,6 +133,56 @@ need_pkg() { # need_pkg command package
   fi
 }
 need_pkg curl curl
+
+# Resources, measured: the stack uses about 90 MB idle and peaked at about 320 MB under the e2e suite's load; Docker
+# Engine about 100-150 MB; Ubuntu Server 300-500 MB. So 1 GB is the least, 2 GB comfortable. Installing packages
+# (Docker's script runs apt, whose hooks start Python) needs a few hundred MB free on top, and runs out of memory
+# where little is free, whatever the total: other programs, or a VM with dynamic memory (Hyper-V) that starts small.
+# Below the minimums the install stops (--skip-checks goes on anyway); below the recommendations it asks.
+MIN_MEM_MB=900 REC_MEM_MB=1800 MIN_AVAIL_MB=700 MIN_DISK_GB=5 REC_DISK_GB=25
+mem_mb=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)
+avail_mb=$(awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo)
+swap_mb=$(awk '/^SwapTotal:/ {print int($2 / 1024)}' /proc/meminfo)
+data=/var/lib/docker
+[[ -d $data ]] || data=/var/lib
+disk_gb=$(df -Pk "$data" | awk 'NR == 2 {print int($4 / 1024 / 1024)}')
+cpus=$(nproc)
+gb() { printf '%d.%d GB' $(($1 / 1024)) $(($1 % 1024 * 10 / 1024)); }
+problems=() concerns=()
+((mem_mb >= MIN_MEM_MB)) || problems+=("only $(gb "$mem_mb") of memory; at least 1 GB is needed")
+((mem_mb >= REC_MEM_MB || mem_mb < MIN_MEM_MB)) || concerns+=("$(gb "$mem_mb") of memory; 2 GB or more is recommended")
+((avail_mb >= MIN_AVAIL_MB)) || concerns+=("only $(gb "$avail_mb") of memory free right now (of $(gb "$mem_mb")): installing packages may run out of memory. Close other programs; on a Hyper-V VM, give it more startup memory or turn off Dynamic Memory")
+((disk_gb >= MIN_DISK_GB)) || problems+=("only $disk_gb GB free on the disk Docker uses ($data); at least $MIN_DISK_GB GB is needed")
+((disk_gb >= REC_DISK_GB || disk_gb < MIN_DISK_GB)) ||
+  concerns+=("$disk_gb GB free on the disk Docker uses; recordings are pruned below 20 GB free and stop below 5 GB (docs/recordings.md: lower both on a small disk)")
+((cpus >= 2)) || concerns+=("1 CPU core; 2 or more are recommended")
+if ((${#problems[@]} > 0)); then
+  for p in "${problems[@]}"; do warn "$p"; done
+  [[ -n $SKIP_CHECKS ]] || die "this machine is too small for MediaMTX UI (--skip-checks installs anyway)."
+fi
+if ((${#concerns[@]} > 0)); then
+  for c in "${concerns[@]}"; do warn "$c"; done
+else
+  ok "$(gb "$mem_mb") memory ($(gb "$avail_mb") free), $disk_gb GB free disk, $cpus CPU cores"
+fi
+# Swap carries a small machine through apt and through peaks: offer a 2 GB swap file where there is none.
+if ((swap_mb == 0 && (mem_mb < REC_MEM_MB || avail_mb < MIN_AVAIL_MB) && disk_gb >= MIN_DISK_GB + 2)) && [[ ! -e /swapfile ]]; then
+  if [[ -n $TTY ]] && yesno "There is no swap. Create a 2 GB swap file (/swapfile) so the install does not run out of memory?" y; then
+    if { fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none; } 2>/dev/null &&
+      chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile; then
+      grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >>/etc/fstab
+      ok "2 GB swap file created and switched on (also after a restart)"
+    else
+      rm -f /swapfile
+      warn "could not create the swap file; going on without"
+    fi
+  elif [[ -z $TTY ]]; then
+    warn "no swap; on a small machine, create some first (docs/before-you-start.md)"
+  fi
+fi
+if ((${#concerns[@]} > 0)) && [[ -z $SKIP_CHECKS && -n $TTY ]]; then
+  yesno "Install anyway?" y || exit 1
+fi
 
 # --- 2. Docker -----------------------------------------------------------------------------------------------------
 

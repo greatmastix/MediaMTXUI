@@ -31,9 +31,30 @@ MediaMTX does not transcode: it passes on the video exactly as your encoder send
 protocol. That takes little CPU, so even a Raspberry Pi or the smallest cloud server with one or two cores copes with
 several streams. (The one heavy job, converting a holding-screen clip, happens in your browser, not on the server.)
 
-The compose file caps the containers' memory: **512 MB** for the sidecar and **2 GB** for MediaMTX. These are upper
-limits, not amounts set aside, but they tell you what the stack may use at most. A machine with **2 GB of RAM or
-more** leaves room for both and for the system itself.
+**Memory**, measured: MediaMTX UI uses about 90 MB when idle and about 320 MB at its busiest (streams, viewers,
+recordings, exports and backups at once). Docker itself takes about 100 to 150 MB, and Ubuntu Server 300 to 500 MB.
+So **1 GB of RAM is the minimum and 2 GB is comfortable**. (Docker Desktop's "4 GB" requirement is for its virtual
+machine on Windows and macOS; Docker on a Linux server needs far less.) The compose file caps the containers at 512 MB
+for the sidecar and 2 GB for MediaMTX: upper limits, not amounts set aside.
+
+What matters during the install is memory that is **free**: installing Docker runs Ubuntu's package tools, which
+start Python and need a few hundred MB for a few minutes. A machine can run out there even with 4 GB in total, when
+other programs hold the memory, or in a virtual machine with dynamic memory that starts small (Hyper-V's **Dynamic
+Memory**: give the VM more startup memory, or turn it off). [The install script](install-script.md) checks this and
+says so.
+
+**Swap** gives a small machine room for such peaks. Many cloud images and Raspberry Pi OS come without much. To add a
+2 GB swap file (the install script offers to do this when a machine is small and has none):
+
+```bash
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+```
+
+```bash
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+The second command keeps it after a restart. `free -h` shows memory and swap.
 
 ### Network: the part that usually matters most
 
@@ -191,7 +212,7 @@ instead, or use a [local-network install](install-local.md) for streaming inside
 
 Before you go on to [Install](install.md):
 
-- [ ] A Linux machine with at least 2 GB of RAM, enough disk for the recordings you plan, and enough upload speed for
+- [ ] A Linux machine with at least 1 GB of RAM (2 GB is comfortable), enough disk for the recordings you plan, and enough upload speed for
       your viewers.
 - [ ] You can open a terminal on it, or connect with SSH ([Install Docker](install-docker.md#open-a-terminal-on-the-server)).
 - [ ] Docker and the Compose plugin are installed: `docker compose version` answers ([Install Docker](install-docker.md)).
