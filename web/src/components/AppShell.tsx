@@ -80,7 +80,8 @@ const nav: NavItem[] = [
   { to: '/streams', label: 'Streams', icon: Clapperboard, minRole: 'streamer', simple: true },
   { to: '/watch', label: 'Watch', icon: MonitorPlay, minRole: 'streamer', simple: true },
   { to: '/paths', label: 'Paths', icon: Waypoints, minRole: 'viewer' },
-  { to: '/recordings', label: 'Recordings', icon: Film, minRole: 'viewer' },
+  // A streamer's list holds its own streams' recordings only.
+  { to: '/recordings', label: 'Recordings', icon: Film, minRole: 'streamer', simple: true },
   { to: '/connections', label: 'Connections', icon: Cable, minRole: 'operator' },
   { to: '/credentials', label: 'Credentials', icon: KeyRound, minRole: 'admin' },
   { to: '/people', label: 'People', icon: Users, minRole: 'admin' },

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"mtxui/internal/audit"
+	"mtxui/internal/auth"
 	"mtxui/internal/mtxconf"
 	"mtxui/internal/pathname"
 	"mtxui/internal/probe"
@@ -187,9 +188,14 @@ func (s *Server) recordingsList(w http.ResponseWriter, r *http.Request) {
 	for i, sg := range segs {
 		bytes[sg.Path] += max(0, sizes[i])
 	}
+	may, err := s.recordingReader(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", "Cannot read the streams.")
+		return
+	}
 	paths := []RecordingPath{}
 	for _, rec := range list {
-		if len(rec.Segments) == 0 {
+		if len(rec.Segments) == 0 || (may != nil && !may(rec.Name)) {
 			continue
 		}
 		p := RecordingPath{Name: rec.Name, Segments: len(rec.Segments), First: rec.Segments[0].Start, Bytes: bytes[rec.Name]}
@@ -205,8 +211,14 @@ func (s *Server) recordingsList(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(paths, func(i, j int) bool { return paths[i].Name < paths[j].Name })
 	// exportMaxSeconds lets the page offer Play and Download only for ranges an export takes.
+	disk := s.recordingsDisk(ctx)
+	if may != nil && disk.Guard != nil { // a streamer hears of its own paths only
+		g := *disk.Guard
+		g.Paths = slices.DeleteFunc(slices.Clone(g.Paths), func(p string) bool { return !may(p) })
+		disk.Guard = &g
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"disk": s.recordingsDisk(ctx), "paths": paths, "exportMaxSeconds": s.d.Settings.ExportMaxDuration.Seconds(),
+		"disk": disk, "paths": paths, "exportMaxSeconds": s.d.Settings.ExportMaxDuration.Seconds(),
 	})
 }
 
@@ -215,6 +227,39 @@ func recordingPath(w http.ResponseWriter, r *http.Request) (string, bool) {
 	name := r.URL.Query().Get("path")
 	if err := pathname.Valid(name); err != nil || strings.HasPrefix(name, "~") {
 		writeError(w, http.StatusBadRequest, "invalid", "Name a path.")
+		return "", false
+	}
+	return name, true
+}
+
+// recordingReader says whose recordings the request may see: every path for viewers and up, for a streamer the paths
+// of the streams it owns. A nil function means all.
+func (s *Server) recordingReader(r *http.Request) (func(path string) bool, error) {
+	cur, _ := current(r.Context())
+	if auth.Role(cur.user.Role).AtLeast(auth.RoleViewer) {
+		return nil, nil
+	}
+	if err := s.loadOwners(r.Context()); err != nil {
+		return nil, err
+	}
+	uid := cur.user.ID
+	return func(path string) bool { return s.ownsPath(uid, path) }, nil
+}
+
+// readablePath is recordingPath for the read routes: a streamer gets only its own streams' paths (others are answered
+// as if they had no recordings at all, so their names are not confirmed).
+func (s *Server) readablePath(w http.ResponseWriter, r *http.Request) (string, bool) {
+	name, ok := recordingPath(w, r)
+	if !ok {
+		return "", false
+	}
+	may, err := s.recordingReader(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", "Cannot read the streams.")
+		return "", false
+	}
+	if may != nil && !may(name) {
+		writeError(w, http.StatusNotFound, "not_found", "No recordings on that path.")
 		return "", false
 	}
 	return name, true
@@ -240,7 +285,7 @@ type RecordingSpan struct {
 }
 
 func (s *Server) recordingSpans(w http.ResponseWriter, r *http.Request) {
-	name, ok := recordingPath(w, r)
+	name, ok := s.readablePath(w, r)
 	if !ok {
 		return
 	}
@@ -284,7 +329,7 @@ func (s *Server) recordingSpans(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) recordingSegments(w http.ResponseWriter, r *http.Request) {
-	name, ok := recordingPath(w, r)
+	name, ok := s.readablePath(w, r)
 	if !ok {
 		return
 	}
@@ -329,7 +374,7 @@ func (s *Server) segmentsOf(ctx context.Context, name string) ([]segmentStart, e
 // recordingExport streams a range of a path's recordings from MediaMTX's playback server: MP4 to download, or
 // fragmented MP4 to play in the page. Duration, size and the number running at once are capped.
 func (s *Server) recordingExport(w http.ResponseWriter, r *http.Request) {
-	name, ok := recordingPath(w, r)
+	name, ok := s.readablePath(w, r)
 	if !ok {
 		return
 	}

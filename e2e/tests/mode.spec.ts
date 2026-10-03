@@ -10,7 +10,7 @@ test('an admin switches between the streaming and the server view', async ({ pag
 
   await mode.getByRole('button', { name: 'Streaming' }).click()
   await expect(page).toHaveURL(/\/streams$/)
-  await expect(nav.getByRole('link')).toHaveText(['Streams', 'Watch', 'Account'])
+  await expect(nav.getByRole('link')).toHaveText(['Streams', 'Watch', 'Recordings', 'Account'])
   await expect(mode.getByRole('button', { name: 'Streaming' })).toHaveAttribute(
     'aria-pressed',
     'true',

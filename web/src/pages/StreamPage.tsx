@@ -99,15 +99,13 @@ function StreamView({ stream: s }: { stream: Stream }) {
               Path details
             </Link>
           )}
-          {expert && (
-            <Link
-              to="/recordings/$"
-              params={{ _splat: s.name }}
-              className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-            >
-              Recordings
-            </Link>
-          )}
+          <Link
+            to="/recordings/$"
+            params={{ _splat: s.name }}
+            className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+          >
+            Recordings
+          </Link>
         </div>
         <p className="text-sm text-muted-foreground">
           <span className="font-mono">{s.name}</span>

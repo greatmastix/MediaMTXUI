@@ -106,7 +106,7 @@ test("the streamer joins, goes live with the page's key, and makes a new one", a
   test.setTimeout(150_000)
   const { context, page } = await joined(browser)
   const nav = page.getByRole('navigation', { name: 'Main' })
-  await expect(nav.getByRole('link')).toHaveText(['Streams', 'Watch', 'Account'])
+  await expect(nav.getByRole('link')).toHaveText(['Streams', 'Watch', 'Recordings', 'Account'])
   await expect(page.getByTestId('stream-e2e/streamer')).toBeVisible()
   await expect(page.getByTestId('stream-e2e/other')).toHaveCount(0)
 

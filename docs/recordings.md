@@ -31,8 +31,8 @@ path that has recordings, with their **Size**, number of **Segments**, when they
 one. Click a path to open its timeline. A stream's page also links to its **Recordings**.
 
 > [!NOTE]
-> Streamers do not see the **Recordings** page, even for their own streams. A viewer, operator or admin can download
-> a recording for them.
+> Streamers see the recordings of their own streams only: the list shows just those paths, and they can play and
+> download them. Deleting recordings is for operators and admins.
 
 ## The timeline
 

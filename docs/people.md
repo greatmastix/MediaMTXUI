@@ -20,15 +20,15 @@ a streamer's view is limited to the streams it owns.
 
 | Role | Who it is for | What they can do |
 |---|---|---|
-| **Streamer** | Someone who streams to their own stream(s) | Sees only the streams they own. On those: show and regenerate the keys, make the stream public or private, switch recording on or off, set the holding screen, forwarding and guest keys, disconnect the encoder, watch it. Their own **Account** page. |
+| **Streamer** | Someone who streams to their own stream(s) | Sees only the streams they own. On those: show and regenerate the keys, make the stream public or private, switch recording on or off, play and download its recordings, set the holding screen, forwarding and guest keys, disconnect the encoder, watch it. Their own **Account** page. |
 | **Viewer** | Someone who watches, a producer, a monitor wall | Watches every stream, public or private, and sees the **Dashboard**, **Streams** (read-only), **Watch**, **Paths** (live state) and **Recordings** (play and download). Changes nothing. |
 | **Operator** | A technician who runs shows | Everything a viewer can, plus: manages every stream (as the owner can), sees **Connections** (who is connected, with their addresses) and disconnects clients, and deletes recordings. |
 | **Admin** | Whoever runs the server | Everything: creates and deletes streams and picks their owners, **Credentials**, **People**, **Configuration**, **Audit log**, **Logs**, **Backups**, **Exposure** (when exposure control is on), and switches recording back on after the free-space guard stopped it. |
 
 A few details that follow from this:
 
-- Streamers do not get the **Recordings** page, even for their own streams. A viewer, operator or admin can play or
-  download them.
+- Streamers get the **Recordings** page for their own streams only: they can play and download those recordings, not
+  delete them.
 - Only admins create or delete streams and choose who owns one. Operators manage existing streams but cannot change
   the owner.
 - Viewers, operators and admins have two modes in the top bar: **Streaming** (just streams and watching) and
