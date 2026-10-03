@@ -37,6 +37,7 @@ import (
 
 // owners caches which user owns which stream's path: the event stream asks on every event.
 type owners struct {
+	reload sync.Mutex // one reload at a time, from its read to its swap
 	mu     sync.RWMutex
 	byPath map[string]int64
 	public map[string]bool // public streams' paths: anyone may watch
@@ -53,8 +54,12 @@ func (s *Server) loadOwners(ctx context.Context) error {
 	return s.reloadOwners(ctx)
 }
 
-// reloadOwners rereads ownership after any change to streams or users.
+// reloadOwners rereads ownership after any change to streams or users. Reloads run one at a time: otherwise one that
+// read the streams just before a change could swap its maps in after the reload that followed the change, and the
+// cache would keep a stream public that was made private, or a removed owner, until some later change.
 func (s *Server) reloadOwners(ctx context.Context) error {
+	s.owners.reload.Lock()
+	defer s.owners.reload.Unlock()
 	list, err := s.d.Store.Streams(ctx)
 	if err != nil {
 		return err
@@ -415,7 +420,7 @@ func (s *Server) streamCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, kind := range []string{store.KeyPublish, store.KeyPlayback} {
-		if _, err := s.newStreamKey(ctx, st, kind, s.author(r)); err != nil {
+		if _, _, err := s.newStreamKey(ctx, st, kind, s.author(r)); err != nil {
 			s.d.Log.Error("stream key", "stream", st.Name, "kind", kind, "err", err)
 			writeError(w, http.StatusInternalServerError, "internal", "The stream was created, but a key could not be made. Regenerate it.")
 			return
@@ -428,12 +433,14 @@ func (s *Server) streamCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, s.streamInfo(ctx, st, cur, s.readMTXConfig()))
 }
 
-// newStreamKey makes a key of a kind for st, seals its secret and records it; the previous key (if any) is left to
-// the caller.
-func (s *Server) newStreamKey(ctx context.Context, st store.Stream, kind, by string) (string, error) {
+// newStreamKey makes a key of a kind for st, seals its secret and makes it the stream's key. The key it replaced (the
+// one the stream held at that moment, not when st was read: of concurrent regenerations each replaces another) is
+// retired; it returns the new key and how many sessions the old one had open. A key that cannot be recorded (the
+// stream is gone) is revoked again, so no key stays valid without a stream to show it.
+func (s *Server) newStreamKey(ctx context.Context, st store.Stream, kind, by string) (StreamKey, int, error) {
 	b := make([]byte, 5)
 	if _, err := rand.Read(b); err != nil {
-		return "", err
+		return StreamKey{}, 0, err
 	}
 	prefix, actions := "key-", []string{"publish"}
 	if kind == store.KeyPlayback {
@@ -444,13 +451,22 @@ func (s *Server) newStreamKey(ctx context.Context, st store.Stream, kind, by str
 		Name: name, Kind: credentials.KindPassword, Actions: actions, Paths: []string{st.Name}, CreatedBy: by,
 	})
 	if err != nil {
-		return "", err
+		return StreamKey{}, 0, err
 	}
 	sealed, err := s.d.Creds.Seal(secret, sealContext(st.ID, kind))
-	if err != nil {
-		return "", err
+	var old *int64
+	if err == nil {
+		old, err = s.d.Store.ReplaceStreamKey(ctx, st.ID, kind, c.ID, sealed)
 	}
-	return secret, s.d.Store.SetStreamKey(ctx, st.ID, kind, c.ID, sealed)
+	if err != nil {
+		_ = s.d.Creds.Revoke(context.WithoutCancel(ctx), name)
+		return StreamKey{}, 0, err
+	}
+	kicked := 0
+	if old != nil {
+		kicked = s.retireKey(ctx, *old)
+	}
+	return StreamKey{Kind: kind, Name: name, Secret: secret}, kicked, nil
 }
 
 func sealContext(id int64, kind string) string { return fmt.Sprintf("stream %d %s", id, kind) }
@@ -516,25 +532,21 @@ func (s *Server) streamKeyRegenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := chi.URLParam(r, "kind")
-	oldID, _, known := keyOf(st, kind)
-	if !known {
+	if _, _, known := keyOf(st, kind); !known {
 		writeError(w, http.StatusNotFound, "not_found", "No such key.")
 		return
 	}
-	secret, err := s.newStreamKey(ctx, st, kind, s.author(r))
-	if err != nil {
+	key, kicked, err := s.newStreamKey(ctx, st, kind, s.author(r))
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found", "No such stream.")
+		return
+	case err != nil:
 		writeError(w, http.StatusInternalServerError, "internal", "A new key could not be made.")
 		return
 	}
-	kicked := 0
-	if oldID != nil {
-		kicked = s.retireKey(ctx, *oldID)
-	}
-	st, _ = s.d.Store.StreamByID(ctx, st.ID)
-	newID, _, _ := keyOf(st, kind)
-	name := s.credentialName(ctx, *newID)
-	audit.Set(ctx, "stream.key.regenerate", st.Name, map[string]any{"kind": kind, "key": name, "kicked": kicked})
-	writeJSON(w, http.StatusOK, StreamKey{Kind: kind, Name: name, Secret: secret})
+	audit.Set(ctx, "stream.key.regenerate", st.Name, map[string]any{"kind": kind, "key": key.Name, "kicked": kicked})
+	writeJSON(w, http.StatusOK, key)
 }
 
 // retireKey revokes a stream key's credential and closes the sessions it opened; it returns how many were closed.
@@ -572,50 +584,57 @@ func (s *Server) streamPatch(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The entry names the action and target at once, and each part below adds its change once that has landed, so a
+	// part that fails after another went through still leaves an entry saying what did.
+	audit.Set(ctx, "stream.update", st.Name, nil)
 	var req streamPatch
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	details := map[string]any{}
+	// Everything is checked before anything changes.
+	p, details := store.StreamPatch{Public: req.Public, Target: req.Target, OwnerID: req.OwnerID}, map[string]any{}
 	if req.Title != nil {
 		t, err := validTitle(*req.Title)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid", err.Error())
 			return
 		}
-		st.Title, details["title"] = t, t
+		p.Title, details["title"] = &t, t
 	}
 	if req.Public != nil {
-		st.Public, details["public"] = *req.Public, *req.Public
+		details["public"] = *req.Public
 	}
 	if req.Target != nil {
 		if !targetPattern.MatchString(*req.Target) {
 			writeError(w, http.StatusBadRequest, "invalid", "Unknown target.")
 			return
 		}
-		st.Target, details["target"] = *req.Target, *req.Target
+		details["target"] = *req.Target
 	}
 	if req.OwnerID != nil {
 		if !auth.Role(cur.user.Role).AtLeast(auth.RoleAdmin) {
 			writeError(w, http.StatusForbidden, "forbidden", "Only admins choose a stream's owner.")
 			return
 		}
-		if *req.OwnerID == 0 {
-			st.OwnerID = nil
-		} else if _, err := s.d.Store.UserByID(ctx, *req.OwnerID); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid", "No such user for the owner.")
-			return
-		} else {
-			st.OwnerID = req.OwnerID
+		if *req.OwnerID != 0 {
+			if _, err := s.d.Store.UserByID(ctx, *req.OwnerID); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid", "No such user for the owner.")
+				return
+			}
 		}
 		details["ownerId"] = *req.OwnerID
 	}
+	if req.MaxReaders != nil && (*req.MaxReaders < 0 || *req.MaxReaders > 100000) {
+		writeError(w, http.StatusBadRequest, "invalid", "The viewer cap is 0 (none) to 100000.")
+		return
+	}
+	if _, _, err := holdingPatch(st, req.Holding, req.Audio, req.Format); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid", err.Error())
+		return
+	}
+
 	if req.MaxReaders != nil {
 		n := *req.MaxReaders
-		if n < 0 || n > 100000 {
-			writeError(w, http.StatusBadRequest, "invalid", "The viewer cap is 0 (none) to 100000.")
-			return
-		}
 		// The config changes only when the cap does: the form always sends it, and "no cap" is no key at all.
 		pathConf, configured := s.readMTXConfig().paths[st.Name]
 		cur, _ := pathConf["maxReaders"].(int)
@@ -634,7 +653,7 @@ func (s *Server) streamPatch(w http.ResponseWriter, r *http.Request) {
 				s.writeConfigError(w, err)
 				return
 			}
-			details["maxReaders"] = n
+			audit.Set(ctx, "", "", map[string]any{"maxReaders": n})
 		}
 	}
 	if req.Record != nil {
@@ -650,27 +669,27 @@ func (s *Server) streamPatch(w http.ResponseWriter, r *http.Request) {
 			s.writeConfigError(w, err)
 			return
 		}
-		details["record"] = *req.Record
+		audit.Set(ctx, "", "", map[string]any{"record": *req.Record})
 	}
-	st, holdingChanged, err := holdingPatch(st, req.Holding, req.Audio, req.Format)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid", err.Error())
+	if (req.Holding != nil || req.Audio != nil || req.Format != nil) && !s.patchHolding(w, r, st.ID, req.Holding, req.Audio, req.Format) {
 		return
 	}
-	if holdingChanged {
-		if err := s.syncHolding(ctx, st, s.author(r), fmt.Sprintf("stream %s holding screen %q, audio %s", st.Name, st.Holding, st.Audio)); err != nil {
-			s.writeConfigError(w, err)
-			return
-		}
-		details["holding"], details["audio"], details["format"] = st.Holding, st.Audio, st.Format
-		s.auto.poke()
-	}
-	if err := s.d.Store.UpdateStream(ctx, st); err != nil {
+	// Only the columns the request names are written: the whole row from the copy read above would undo what another
+	// request changed meanwhile (an admin's new owner, a clip uploaded since).
+	if err := s.d.Store.PatchStream(ctx, st.ID, p); errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "No such stream.")
+		return
+	} else if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "Cannot save the stream.")
 		return
 	}
+	audit.Set(ctx, "", "", details)
 	_ = s.reloadOwners(ctx)
-	audit.Set(ctx, "stream.update", st.Name, details)
+	st, err := s.d.Store.StreamByID(ctx, st.ID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "No such stream.")
+		return
+	}
 	writeJSON(w, http.StatusOK, s.streamInfo(ctx, st, cur, s.readMTXConfig()))
 }
 
@@ -687,6 +706,15 @@ func (s *Server) streamDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	kicked += s.retireGuestKeys(ctx, st.ID)
+	// Under the holding lock, so no clip upload or holding change lands between the stream's last read and its
+	// removal: one would put the path back into mediamtx.yml or leave a clip nobody references.
+	s.holdingMu.Lock()
+	defer s.holdingMu.Unlock()
+	last, err := s.d.Store.StreamByID(ctx, st.ID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "No such stream.")
+		return
+	}
 	if _, exists := s.readMTXConfig().paths[st.Name]; exists {
 		_, err := s.d.Config.Edit(ctx, s.author(r), "stream "+st.Name+" deleted", s.guardEdit, func(d *yamledit.Doc) error {
 			return d.Delete([]string{"paths", st.Name})
@@ -696,12 +724,18 @@ func (s *Server) streamDelete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.d.Store.DeleteStream(ctx, st.ID); err != nil {
+	// The record goes with every valid key it still points to, including one regenerated or made for a guest after
+	// the stream was read above, so none stays valid for a path the next stream of that name gets.
+	late, err := s.d.Store.DeleteStreamKeys(ctx, st.ID)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "Cannot delete the stream.")
 		return
 	}
-	s.removeClip(st.ClipAAC)
-	s.removeClip(st.ClipOpus)
+	for _, id := range late {
+		kicked += s.retireKey(ctx, id)
+	}
+	s.removeClip(last.ClipAAC)
+	s.removeClip(last.ClipOpus)
 	_ = s.reloadOwners(ctx)
 	audit.Set(ctx, "stream.delete", st.Name, map[string]any{"kicked": kicked})
 	w.WriteHeader(http.StatusNoContent)

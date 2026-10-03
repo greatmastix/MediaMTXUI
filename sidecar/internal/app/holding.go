@@ -11,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	amp4 "github.com/abema/go-mp4"
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/mp4/codecs"
@@ -179,29 +181,113 @@ func codecName(c codecs.Codec) string {
 	return strings.TrimPrefix(fmt.Sprintf("%T", c), "*codecs.")
 }
 
-// storeClip reads an uploaded clip, fits it to the stream's audio and writes it into the holding directory under a
-// name of its own (so a new clip is a new file, and MediaMTX reloads it). It returns the file name.
-func (s *Server) storeClip(streamID int64, audio, format string, body io.Reader) (string, error) {
-	dir := s.d.Settings.HoldingDir
-	up, err := os.CreateTemp(dir, ".upload-*")
+// receiveClip writes an upload into a temporary file in the holding directory, which the caller closes and removes,
+// and returns it with its size.
+func (s *Server) receiveClip(body io.Reader) (*os.File, int64, error) {
+	up, err := os.CreateTemp(s.d.Settings.HoldingDir, ".upload-*")
 	if err != nil {
-		return "", err
+		return nil, 0, err
 	}
-	defer os.Remove(up.Name())
-	defer up.Close()
 	n, err := io.Copy(up, io.LimitReader(body, maxHoldingBytes+1))
-	if err != nil {
-		return "", err
+	if err == nil && n > maxHoldingBytes {
+		err = userErrorf("The clip is larger than %d MB.", maxHoldingBytes>>20)
 	}
-	if n > maxHoldingBytes {
-		return "", userErrorf("The clip is larger than %d MB.", maxHoldingBytes>>20)
+	if err != nil {
+		_ = up.Close()
+		_ = os.Remove(up.Name())
+		return nil, 0, err
+	}
+	return up, n, nil
+}
+
+// Refusals of a clip the MP4 reader cannot or should not take.
+const (
+	notMP4  = userError("The file is not an MP4 MediaMTX can read (fragmented MP4s are not). Transcode it.")
+	tooLong = userError("The clip is too long for a holding screen: an hour at most.")
+)
+
+// What an uploaded clip may declare, checked before the MP4 reader builds a record for each sample: sample tables
+// are compact (one entry can declare millions of samples), so a small file could otherwise make it allocate far more
+// than the sidecar's memory limit. An hour of 60 fps video with its audio (about 110 samples a second) fits.
+const (
+	maxClipSamples = 400_000
+	// A real MP4 has well under a hundred boxes.
+	maxClipBoxes = 10_000
+	// No sample table has more entries than the clip has samples, nor entries over 12 bytes.
+	maxClipTable = 12*maxClipSamples + 20
+	// The movie header, edit lists and sample descriptions take a few hundred bytes each.
+	maxClipEntry = 1 << 20
+)
+
+// clipLimits walks an MP4's box structure, reading only the sample tables' sizes and counts, and refuses one that
+// declares more samples than maxClipSamples, samples that do not fit in its size bytes, or more structure than any
+// real clip has. Every box the MP4 reader expands is counted here or bounded in size.
+func clipLimits(r io.ReadSeeker, size int64) error {
+	boxes, samples := 0, uint64(0)
+	_, err := amp4.ReadBoxStructure(r, func(h *amp4.ReadHandle) (any, error) {
+		if boxes++; boxes > maxClipBoxes {
+			return nil, notMP4
+		}
+		switch t := h.BoxInfo.Type.String(); t {
+		case "moov", "trak", "mdia", "minf", "stbl":
+			return h.Expand()
+		case "mvhd", "edts", "stsd":
+			if h.BoxInfo.Size > maxClipEntry {
+				return nil, notMP4
+			}
+		case "stts", "stsz", "stsc", "stco", "stss", "ctts":
+			if h.BoxInfo.Size > maxClipTable {
+				return nil, tooLong
+			}
+			if t != "stts" && t != "stsz" {
+				return nil, nil
+			}
+			box, _, err := h.ReadPayload()
+			if err != nil {
+				return nil, notMP4
+			}
+			switch b := box.(type) {
+			case *amp4.Stts:
+				for _, e := range b.Entries {
+					samples += uint64(e.SampleCount)
+				}
+				if samples > maxClipSamples {
+					return nil, tooLong
+				}
+			case *amp4.Stsz:
+				total := uint64(b.SampleSize) * uint64(b.SampleCount)
+				if b.SampleSize == 0 {
+					for _, n := range b.EntrySize {
+						total += uint64(n)
+					}
+				}
+				if total > uint64(size) { //nolint:gosec // a file's size is not negative
+					return nil, notMP4 // samples larger than the file holds
+				}
+			}
+		}
+		return nil, nil
+	})
+	var ue userError
+	if err != nil && !errors.As(err, &ue) {
+		return notMP4
+	}
+	return err
+}
+
+// storeClip reads an uploaded clip (size bytes in up), fits it to the stream's audio and writes it into the holding
+// directory under a name of its own (so a new clip is a new file, and MediaMTX reloads it). It returns the file name.
+func (s *Server) storeClip(streamID int64, audio, format string, up *os.File, size int64) (string, error) {
+	dir := s.d.Settings.HoldingDir
+	if err := clipLimits(up, size); err != nil {
+		return "", err
 	}
 	if _, err := up.Seek(0, io.SeekStart); err != nil {
 		return "", err
 	}
 	var p pmp4.Presentation
 	if err := p.Unmarshal(up); err != nil {
-		return "", userError("The file is not an MP4 MediaMTX can read (fragmented MP4s are not). Transcode it.")
+		return "", notMP4
 	}
 	if err := fitClip(&p, audio, format); err != nil {
 		return "", err
@@ -289,7 +375,7 @@ func (s *Server) syncHolding(ctx context.Context, st store.Stream, author, reaso
 // stream keeps its audio when it has a version for it. The holding screen switches to the clip.
 func (s *Server) holdingUpload(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	st, _, ok := s.streamFor(w, r, true)
+	st, cur, ok := s.streamFor(w, r, true)
 	if !ok {
 		return
 	}
@@ -303,10 +389,47 @@ func (s *Server) holdingUpload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid", "Unknown audio or format.")
 		return
 	}
+	audit.Set(ctx, "stream.holding.upload", st.Name, map[string]any{"audio": audio, "format": format})
+	// The body arrives before the holding lock is taken, one upload per stream at a time: a slow upload holds up
+	// only its own stream's next upload, never other streams' changes or the log follower (FollowEncoder), and
+	// parallel uploads cannot pile up temporary files.
+	upload := uploadKey{s, st.ID}
+	if _, busy := uploading.LoadOrStore(upload, true); busy {
+		writeError(w, http.StatusConflict, "busy", "A clip for this stream is being uploaded already. Try again once it is done.")
+		return
+	}
+	defer uploading.Delete(upload)
+	extendBodyDeadline(w, holdingUploadTime)
+	up, size, err := s.receiveClip(http.MaxBytesReader(w, r.Body, maxHoldingBytes+1))
+	if err == nil {
+		defer os.Remove(up.Name())
+		defer up.Close()
+	}
+	var ue userError
+	switch {
+	case errors.As(err, &ue):
+		writeError(w, http.StatusUnprocessableEntity, "clip", ue.Error())
+		return
+	case err != nil:
+		s.d.Log.Error("receiving a holding clip", "stream", st.Name, "err", err)
+		writeError(w, http.StatusInternalServerError, "internal", "The clip could not be stored.")
+		return
+	}
+
 	s.holdingMu.Lock()
 	defer s.holdingMu.Unlock()
-	name, err := s.storeClip(st.ID, audio, format, http.MaxBytesReader(w, r.Body, maxHoldingBytes+1))
-	var ue userError
+	// The stream as it is now: the upload may have taken minutes, and what the clip replaces, what the stream is
+	// left with and whether this user may still change it are decided on that, never on the copy read before.
+	st, err = s.d.Store.StreamByID(ctx, st.ID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "No such stream.")
+		return
+	}
+	if !s.mayManage(cur, st) {
+		writeError(w, http.StatusForbidden, "forbidden", "Only the stream's owner, operators and admins can change it.")
+		return
+	}
+	name, err := s.storeClip(st.ID, audio, format, up, size)
 	switch {
 	case errors.As(err, &ue):
 		writeError(w, http.StatusUnprocessableEntity, "clip", ue.Error())
@@ -333,7 +456,12 @@ func (s *Server) holdingUpload(w http.ResponseWriter, r *http.Request) {
 		s.writeConfigError(w, err)
 		return
 	}
-	if err := s.d.Store.UpdateStream(ctx, st); err != nil {
+	audit.Set(ctx, "", "", map[string]any{"file": name})
+	s.auto.poke()
+	// Only the holding columns: the owner and the public flag are not this request's to write.
+	if err := s.d.Store.PatchStream(ctx, st.ID, store.StreamPatch{
+		Audio: &st.Audio, Holding: &st.Holding, ClipAAC: &st.ClipAAC, ClipOpus: &st.ClipOpus, Format: &st.Format,
+	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "Cannot save the stream.")
 		return
 	}
@@ -342,10 +470,51 @@ func (s *Server) holdingUpload(w http.ResponseWriter, r *http.Request) {
 			s.removeClip(old)
 		}
 	}
-	s.auto.poke()
-	audit.Set(ctx, "stream.holding.upload", st.Name, map[string]any{"file": name, "audio": audio, "format": format})
-	cur, _ := current(ctx)
 	writeJSON(w, http.StatusOK, s.streamInfo(ctx, st, cur, s.readMTXConfig()))
+}
+
+// holdingUploadTime is how long an upload may take to arrive: 64 MB at about 1 Mbit/s.
+const holdingUploadTime = 10 * time.Minute
+
+// uploading marks the streams a holding clip is being uploaded for (an uploadKey each).
+var uploading sync.Map
+
+type uploadKey struct {
+	s  *Server
+	id int64
+}
+
+// patchHolding applies a stream patch's holding, audio and format to the stream as it is now, under holdingMu like
+// every change to those columns, so a change made since the request read the stream (a clip uploaded, the version
+// following the encoder) is neither undone nor checked against an old state. It answers a failure itself.
+func (s *Server) patchHolding(w http.ResponseWriter, r *http.Request, id int64, holding, audio, format *string) bool {
+	ctx := r.Context()
+	s.holdingMu.Lock()
+	defer s.holdingMu.Unlock()
+	st, err := s.d.Store.StreamByID(ctx, id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "No such stream.")
+		return false
+	}
+	st, changed, err := holdingPatch(st, holding, audio, format)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid", err.Error())
+		return false
+	}
+	if !changed {
+		return true
+	}
+	if err := s.syncHolding(ctx, st, s.author(r), fmt.Sprintf("stream %s holding screen %q, audio %s", st.Name, st.Holding, st.Audio)); err != nil {
+		s.writeConfigError(w, err)
+		return false
+	}
+	audit.Set(ctx, "", "", map[string]any{"holding": st.Holding, "audio": st.Audio, "format": st.Format})
+	s.auto.poke()
+	if err := s.d.Store.PatchStream(ctx, id, store.StreamPatch{Audio: &st.Audio, Holding: &st.Holding, Format: &st.Format}); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", "Cannot save the stream.")
+		return false
+	}
+	return true
 }
 
 // holdingPatch applies the holding, audio and format fields of a stream patch: it returns the stream as changed,
@@ -424,7 +593,9 @@ const followGap = 10 * time.Second
 // FollowEncoder is called (by the log follower) when MediaMTX refused an encoder of path for its tracks: sends is
 // what it sends, as MediaMTX lists it. When its audio is the other one and the holding screen has a version with it,
 // the stream switches to that version, so the encoder's automatic reconnect gets in (OBS retries every few seconds).
-// It returns the note to show instead of the refusal, or nil to show the refusal.
+// It returns the note to show instead of the refusal, or nil to show the refusal. It runs on the log follower's
+// goroutine, so holdingMu is never held while a client sends something: it waits at most for one clip's check and
+// one config write.
 func (s *Server) FollowEncoder(path, sends, _ string) *mtxlog.Note {
 	audio := ""
 	switch {
@@ -461,7 +632,7 @@ func (s *Server) FollowEncoder(path, sends, _ string) *mtxlog.Note {
 			s.d.Log.Warn("switching the holding version", "stream", st.Name, "err", err)
 			return nil
 		}
-		if err := s.d.Store.UpdateStream(ctx, st); err != nil {
+		if err := s.d.Store.PatchStream(ctx, st.ID, store.StreamPatch{Audio: &st.Audio}); err != nil {
 			return nil
 		}
 		s.d.Audit.Record(ctx, store.AuditEvent{

@@ -58,9 +58,13 @@ type prefixed struct {
 
 func (p prefixed) Scan(dest ...any) error { return p.row.Scan(append(p.head, dest...)...) }
 
-// GuestKeys lists a stream's guest keys, newest first, expired and revoked ones included (at most 50).
+// GuestKeys lists a stream's guest keys, newest first: the newest 50, expired and revoked ones included, and every
+// valid key older than those. However many keys were made and revoked since, the valid ones are all there, so a count
+// of them (the cap on valid keys) and revoking them (when the stream goes) miss none, and the stream page shows them.
 func (s *Store) GuestKeys(ctx context.Context, streamID int64) ([]GuestKey, error) {
-	return s.guestKeys(ctx, 50, `g.stream_id = ?`, streamID)
+	return s.guestKeys(ctx, 10000, `g.stream_id = ? AND (c.revoked_at IS NULL AND (c.expires_at IS NULL OR c.expires_at > ?)
+		OR c.id IN (SELECT n.id FROM stream_guest_keys m JOIN stream_credentials n ON n.id = m.credential_id
+			WHERE m.stream_id = ? ORDER BY n.created_at DESC, n.id DESC LIMIT 50))`, streamID, ms(s.now()), streamID)
 }
 
 // GuestKey looks up one of a stream's guest keys by its credential id.

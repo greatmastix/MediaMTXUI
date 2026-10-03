@@ -87,7 +87,8 @@ func (s *Store) Streams(ctx context.Context) ([]Stream, error) {
 	return out, rows.Err()
 }
 
-// UpdateStream saves title, owner, target, whether it is public, its audio and its holding screen.
+// UpdateStream saves title, owner, target, whether it is public, its audio and its holding screen. It writes every
+// column from st: a request that read st earlier undoes whatever changed since, so handlers use PatchStream.
 func (s *Store) UpdateStream(ctx context.Context, st Stream) error {
 	if st.Audio == "" {
 		st.Audio = "aac"
@@ -101,20 +102,110 @@ func (s *Store) UpdateStream(ctx context.Context, st Stream) error {
 	return affected(res, err)
 }
 
+// StreamPatch names the columns of a stream to change; a nil field leaves its column as it is. An OwnerID of 0
+// clears the owner.
+type StreamPatch struct {
+	Title    *string
+	OwnerID  *int64
+	Target   *string
+	Public   *bool
+	Audio    *string
+	Holding  *string
+	ClipAAC  *string
+	ClipOpus *string
+	Format   *string
+}
+
+// PatchStream changes only the columns p names, so requests that change different parts of one stream at the same
+// time each keep their change: a holding clip upload cannot put back the owner or the public flag it read before an
+// admin changed them.
+func (s *Store) PatchStream(ctx context.Context, id int64, p StreamPatch) error {
+	var owner *int64
+	if p.OwnerID != nil && *p.OwnerID != 0 {
+		owner = p.OwnerID
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE streams SET title = coalesce(?, title),
+		owner_id = CASE WHEN ? THEN ? ELSE owner_id END, target = coalesce(?, target), public = coalesce(?, public),
+		audio = coalesce(?, audio), holding = coalesce(?, holding), clip_aac = coalesce(?, clip_aac),
+		clip_opus = coalesce(?, clip_opus), format = coalesce(?, format) WHERE id = ?`,
+		p.Title, p.OwnerID != nil, owner, p.Target, p.Public, p.Audio, p.Holding, p.ClipAAC, p.ClipOpus, p.Format, id)
+	return affected(res, err)
+}
+
 // SetStreamKey records a stream's current key of a kind: its credential and encrypted secret.
 func (s *Store) SetStreamKey(ctx context.Context, id int64, kind string, credentialID int64, enc string) error {
-	q := `UPDATE streams SET publish_key_id = ?, publish_key_enc = ? WHERE id = ?`
+	_, err := s.ReplaceStreamKey(ctx, id, kind, credentialID, enc)
+	return err
+}
+
+// ReplaceStreamKey makes a credential the stream's key of a kind, with its encrypted secret, and returns the key it
+// replaced (nil if there was none), read in the same transaction: of concurrent replacements each gets back a
+// different key, so the caller can revoke exactly the one it replaced and no key is left valid but unlinked.
+func (s *Store) ReplaceStreamKey(ctx context.Context, id int64, kind string, credentialID int64, enc string) (*int64, error) {
+	read, write := `SELECT publish_key_id FROM streams WHERE id = ?`, `UPDATE streams SET publish_key_id = ?, publish_key_enc = ? WHERE id = ?`
 	if kind == KeyPlayback {
-		q = `UPDATE streams SET playback_key_id = ?, playback_key_enc = ? WHERE id = ?`
+		read, write = `SELECT playback_key_id FROM streams WHERE id = ?`, `UPDATE streams SET playback_key_id = ?, playback_key_enc = ? WHERE id = ?`
 	}
-	res, err := s.db.ExecContext(ctx, q, credentialID, enc, id)
-	return affected(res, err)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck // after Commit, a no-op
+	var old *int64
+	err = tx.QueryRowContext(ctx, read, id).Scan(&old)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, write, credentialID, enc, id); err != nil {
+		return nil, err
+	}
+	return old, tx.Commit()
 }
 
 // DeleteStream removes a stream record (its credentials stay, revoked by the caller, for the audit trail).
 func (s *Store) DeleteStream(ctx context.Context, id int64) error {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM streams WHERE id = ?`, id)
 	return affected(res, err)
+}
+
+// DeleteStreamKeys removes a stream record and, in the same transaction, revokes every credential it still points
+// to that is valid: its two keys and its guest keys, however many. It returns their ids, for the caller to close what
+// they opened. A key a concurrent request attached after the caller read the stream (a regenerated key, a new guest
+// key) is among them, so nothing tied to the stream stays valid once its record and guest links are gone.
+func (s *Store) DeleteStreamKeys(ctx context.Context, id int64) ([]int64, error) {
+	now := ms(s.now())
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck // after Commit, a no-op
+	rows, err := tx.QueryContext(ctx, `UPDATE stream_credentials SET revoked_at = ?
+		WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?) AND id IN (
+			SELECT publish_key_id FROM streams WHERE id = ? UNION SELECT playback_key_id FROM streams WHERE id = ?
+			UNION SELECT credential_id FROM stream_guest_keys WHERE stream_id = ?)
+		RETURNING id`, now, now, id, id, id)
+	if err != nil {
+		return nil, err
+	}
+	var revoked []int64
+	for rows.Next() {
+		var c int64
+		if err = rows.Scan(&c); err != nil {
+			break
+		}
+		revoked = append(revoked, c)
+	}
+	if err = errors.Join(err, rows.Err(), rows.Close()); err != nil {
+		return nil, err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM streams WHERE id = ?`, id)
+	if err := affected(res, err); err != nil {
+		return nil, err
+	}
+	return revoked, tx.Commit()
 }
 
 func affected(res sql.Result, err error) error {
