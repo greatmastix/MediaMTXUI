@@ -6,6 +6,11 @@ internet. You need no domain, no certificate and no port forwarding: the UI is a
 You need a Linux machine with Docker ([Install Docker](install-docker.md)) and a terminal on it. For a server that
 people reach from anywhere, use the [public install](install.md) instead.
 
+> [!TIP]
+> **The quick way:** the [install script](install-script.md) does all of this (and installs Docker): run
+> `curl -fsSL https://github.com/greatmastix/MediaMTXUI/releases/latest/download/install.sh | sudo bash` and choose
+> **2, on this local network only**.
+
 ## Install
 
 ### 1. Create a folder

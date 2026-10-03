@@ -6,6 +6,10 @@ Docker is installed ([Install Docker](install-docker.md)), and that your domain 
 443 are open ([Before you start](before-you-start.md)). For a home or studio network without a domain, see
 [Local network only](install-local.md) instead.
 
+> [!TIP]
+> **The quick way:** the [install script](install-script.md) does everything on this page (and installs Docker) with
+> one command: `curl -fsSL https://github.com/greatmastix/MediaMTXUI/releases/latest/download/install.sh | sudo bash`.
+
 ## The short version
 
 ```bash

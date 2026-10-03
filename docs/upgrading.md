@@ -1,5 +1,9 @@
 # Upgrading
 
+> [!TIP]
+> Installed with the [install script](install-script.md)? Run it again: it does the download, pull and restart below
+> for you, keeping your settings.
+
 This page explains how to move an existing MediaMTX UI install to a newer release, how to stay on a particular
 version, and what to do if an upgrade goes wrong. It is for whoever looks after the server.
 

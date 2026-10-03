@@ -6,7 +6,8 @@
 # On a tag, the install files then go to the GitHub release (created with generated notes if it does not exist yet):
 # compose.yaml with the sidecar image pinned to that version, next to the MediaMTX image it pins already, so that the
 # README's install and upgrade always fetch a pair that was tested together; .env.example as env.example (GitHub
-# renames assets with a leading dot); and the optional overrides (behind a proxy, local network, exposure control).
+# renames assets with a leading dot); the optional overrides (behind a proxy, local network, exposure control); and
+# install.sh, which installs or upgrades to the newest release (or the one given with --version).
 name: release
 
 on:
@@ -101,6 +102,7 @@ jobs:
             { echo "::error::compose.yaml names no sidecar image to pin"; exit 1; }
           cp .env.example dist/env.example
           cp deploy/compose.behind-proxy.yaml deploy/compose.exposure.yaml deploy/compose.lan.yaml dist/
+          cp scripts/install.sh dist/install.sh
       - name: Attach them to the release
         env:
           GH_TOKEN: ${{ github.token }}

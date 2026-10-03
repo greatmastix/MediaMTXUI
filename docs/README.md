@@ -11,6 +11,7 @@ New here? Read [Before you start](before-you-start.md) first: it helps you choos
 | Page | What it covers |
 |---|---|
 | [Before you start](before-you-start.md) | Choosing a server or a Raspberry Pi, a domain name, which ports to open |
+| [Install script](install-script.md) | One command from a fresh machine to a running setup page, Docker included |
 | [Install Docker](install-docker.md) | Docker and Docker Compose on Ubuntu, Debian, Raspberry Pi OS and others, from zero |
 | [Install MediaMTX UI](install.md) | The public install with HTTPS from Let's Encrypt, step by step |
 | [Local network only](install-local.md) | A home or studio network that the internet cannot reach |

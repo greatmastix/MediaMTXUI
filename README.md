@@ -17,6 +17,18 @@ platforms, holding screens, logs and backups. HTTPS with Let's Encrypt is built 
 
 ## Install
 
+**The quick way**, on a fresh Ubuntu, Debian or Raspberry Pi OS machine: one command installs Docker if needed, asks
+whether the server is on the internet (with a domain) or on your local network only, and starts everything:
+
+```bash
+curl -fsSL https://github.com/greatmastix/MediaMTXUI/releases/latest/download/install.sh | sudo bash
+```
+
+It prints the address to open and the setup token. Run it again later to upgrade. Details:
+[Install script](docs/install-script.md).
+
+**Step by step** instead:
+
 > [!TIP]
 > **New to servers or Docker?** The [documentation](docs/README.md) starts from zero: [choosing a
 > server](docs/before-you-start.md), [installing Docker](docs/install-docker.md), then [the install step by
