@@ -1,6 +1,12 @@
 # Publishes the sidecar image to ghcr.io for linux/amd64, arm64 and arm/v7: on a version tag (v1.2.3) as 1.2.3, 1.2,
 # 1 and latest, and on every push to main as edge. The same checks as ci.yml run first. The Go and web stages
-# cross-compile on the runner (Dockerfile), so no emulation is needed.
+# cross-compile on the runner (Dockerfile), so no emulation is needed. Provenance and the SBOM are buildx's, attached
+# to the image; there is no GitHub attestation, so no job needs an OIDC token.
+#
+# On a tag, the install files then go to the GitHub release (created with generated notes if it does not exist yet):
+# compose.yaml with the sidecar image pinned to that version, next to the MediaMTX image it pins already, so that the
+# README's install and upgrade always fetch a pair that was tested together; .env.example as env.example (GitHub
+# renames assets with a leading dot); and the two optional overrides.
 name: release
 
 on:
@@ -33,8 +39,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write
-      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -73,3 +77,39 @@ jobs:
           sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  install-files:
+    if: github.ref_type == 'tag'
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pin the sidecar image in compose.yaml to this version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          v=${TAG#v}
+          [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::not a version tag: $TAG"; exit 1; }
+          mkdir dist
+          sed "s|mediamtxui:\${MTXUI_VERSION:-edge}|mediamtxui:\${MTXUI_VERSION:-$v}|" compose.yaml >dist/compose.yaml
+          grep -qF "mediamtxui:\${MTXUI_VERSION:-$v}" dist/compose.yaml ||
+            { echo "::error::compose.yaml names no sidecar image to pin"; exit 1; }
+          cp .env.example dist/env.example
+          cp deploy/compose.behind-proxy.yaml deploy/compose.exposure.yaml dist/
+      - name: Attach them to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            pre=()
+            [[ $TAG == *-* ]] && pre=(--prerelease) # a pre-release is never releases/latest
+            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes "${pre[@]}"
+          fi

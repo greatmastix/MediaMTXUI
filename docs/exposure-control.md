@@ -39,13 +39,21 @@ It installs `/usr/local/sbin/mtx-portgate`, the policy `/etc/mtx-portgate/policy
 `FORCE_POLICY=1` replaces it), the request directory `/var/lib/mtx-portgate-requests` (owned by uid 10002; set
 `REQUESTS_DIR` for another) and the units `mtx-portgate.{service,path,timer}`, then runs it once: every port closed.
 
-Then start the stack with the exposure override:
+Then add the exposure override to the stack. Download it next to `compose.yaml`:
 
 ```bash
-docker compose -f compose.yaml -f deploy/compose.exposure.yaml up -d
+curl -fsSLO https://github.com/greatmastix/MediaMTXUI/releases/latest/download/compose.exposure.yaml
 ```
 
-(`PORTGATE_DIR` and `PORTGATE_STATUS_DIR` in `.env` if you changed the directories.) The Exposure page appears for
+add this line to `.env`, so that every `docker compose` command (upgrades included) uses it (with your own reverse
+proxy, list `compose.behind-proxy.yaml` before it):
+
+```bash
+COMPOSE_FILE=compose.yaml:compose.exposure.yaml
+```
+
+and run `docker compose up -d`. (In a checkout of the repository, the override is `deploy/compose.exposure.yaml`.)
+Set `PORTGATE_DIR` and `PORTGATE_STATUS_DIR` in `.env` if you changed the directories. The Exposure page appears for
 admins.
 
 ## Operating it

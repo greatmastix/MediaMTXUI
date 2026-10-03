@@ -1,16 +1,23 @@
 # Behind your own reverse proxy
 
 If a reverse proxy already terminates HTTPS on the host (Caddy, nginx, Traefik), let it do that for MediaMTX UI too:
-the sidecar then serves plain HTTP on `127.0.0.1:8080`, and gets no certificate of its own.
+the sidecar then serves plain HTTP on `127.0.0.1:8080`, and gets no certificate of its own. Download the override
+next to `compose.yaml`:
 
 ```bash
-docker compose -f compose.yaml -f deploy/compose.behind-proxy.yaml up -d
+curl -fsSLO https://github.com/greatmastix/MediaMTXUI/releases/latest/download/compose.behind-proxy.yaml
 ```
 
-(`deploy/compose.behind-proxy.yaml` is in the repository; download it next to `compose.yaml`.) In `.env`, `DOMAIN` is
-still the name users open; `UI_PORT` changes the local port. The stream ports are published as before: the proxy
-only carries the UI, its API, and the browser's live view (HLS and WebRTC signalling); WebRTC media (UDP 8189) goes
-straight to MediaMTX.
+add this line to `.env`, so that every `docker compose` command (upgrades included) uses both files:
+
+```bash
+COMPOSE_FILE=compose.yaml:compose.behind-proxy.yaml
+```
+
+and run `docker compose up -d`. (In a checkout of the repository, the override is
+`deploy/compose.behind-proxy.yaml`.) In `.env`, `DOMAIN` is still the name users open; `UI_PORT` changes the local
+port. The stream ports are published as before: the proxy only carries the UI, its API, and the browser's live view
+(HLS and WebRTC signalling); WebRTC media (UDP 8189) goes straight to MediaMTX.
 
 ## What the proxy must do
 
@@ -61,19 +68,17 @@ server {
 
 ## Traefik
 
-Add labels to the `sidecar` service in a compose override of your own, and leave out its `ports:` (Traefik reaches it
-on a shared Docker network instead):
+Traefik reaches the sidecar on a shared Docker network instead of a published port. Build on the override above, and
+add one of your own next to it, `compose.traefik.yaml`:
 
 ```yaml
 services:
   sidecar:
-    environment:
-      MTXUI_TLS: "off"
-      MTXUI_TRUSTED_PROXIES: <Traefik's address on the shared network>
     ports: !reset []
     networks: [mtx, traefik]
     labels:
       traefik.enable: "true"
+      traefik.docker.network: traefik
       traefik.http.routers.mtxui.rule: Host(`stream.example.com`)
       traefik.http.routers.mtxui.tls.certresolver: letsencrypt
       traefik.http.services.mtxui.loadbalancer.server.port: "9080"
@@ -82,3 +87,18 @@ networks:
   traefik:
     external: true
 ```
+
+In `.env`, list all three files, and trust Traefik:
+
+```bash
+COMPOSE_FILE=compose.yaml:compose.behind-proxy.yaml:compose.traefik.yaml
+# Traefik's address on the traefik network (docker network inspect traefik)
+TRUSTED_PROXIES=172.30.0.2
+```
+
+The behind-proxy override matters here: on two networks, the sidecar cannot tell from its own interfaces which one
+is the stack's, so the override pins the stack network to `MTX_SUBNET` and names it to the sidecar
+(`MTXUI_STACK_SUBNET`). MediaMTX believes the client addresses the sidecar passes on only from that subnet. Were the
+Traefik network taken for it, live view in the UI would be refused, and MediaMTX would see every client of `/whip/`
+and `/whep/` as the sidecar itself. `traefik.docker.network` tells Traefik which of the sidecar's two networks to
+use.

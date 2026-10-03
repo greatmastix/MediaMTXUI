@@ -8,6 +8,10 @@
 #
 # The sidecar gets its certificate from Let's Encrypt by itself and keeps it renewed. Everything else is optional:
 # see .env.example and docs/config.md. Behind your own reverse proxy: deploy/compose.behind-proxy.yaml.
+#
+# Take this file from a release (README: Install, Upgrading). There the sidecar's image names that release, which
+# was tested with the MediaMTX image below, and upgrading means replacing the file; settings of your own go into
+# compose.override.yaml. On main, the sidecar's image is edge, main's own build.
 name: mediamtx-ui
 
 x-hardened: &hardened
@@ -36,6 +40,7 @@ services:
       - data-holding:/holding:ro # holding clips: the same path as in the sidecar, which names them by it
     # Stream ports only. The API (9997), metrics (9998), playback (9996), pprof (9999), HLS (8888) and WebRTC
     # signalling (8889) stay on the stack network: the sidecar serves what browsers need, behind its sign-in.
+    # 0.0.0.0 publishes on IPv4 only (README: Ports).
     ports:
       - "${STREAM_BIND:-0.0.0.0}:8554:8554/tcp" # RTSP
       - "${STREAM_BIND:-0.0.0.0}:1935:1935/tcp" # RTMP
@@ -49,7 +54,7 @@ services:
 
   sidecar:
     <<: *hardened
-    image: ghcr.io/greatmastix/mediamtxui:${MTXUI_VERSION:-latest}
+    image: ghcr.io/greatmastix/mediamtxui:${MTXUI_VERSION:-edge} # a release's copy names its version (release.yml)
     tmpfs: ["/tmp:size=64m,mode=1777"]
     environment:
       # Every setting: docs/config.md. Secrets are never set here: the sidecar generates them into its state.

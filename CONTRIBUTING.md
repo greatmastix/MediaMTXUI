@@ -84,11 +84,18 @@ A change that breaks one of these is wrong even when the tests pass.
 It vendors the new OpenAPI spec and updates every pin. `./dev test` then fails until
 `sidecar/internal/mtxapi/operations.yaml` covers every operation of the new spec. Read MediaMTX's release notes for
 changed behaviour (config keys, hook names, log lines the sidecar reads), then run `./dev ci` and `./dev e2e`.
+Installs get the new MediaMTX with the next release's `compose.yaml`, together with the sidecar built for it.
 
 ## Releases
 
 Pushing a tag `v1.2.3` runs the checks and publishes the multi-arch image to
 `ghcr.io/greatmastix/mediamtxui` as `1.2.3`, `1.2`, `1` and `latest` (`.github/workflows/release.yml`). Every push
-to `main` publishes `edge`.
+to `main` publishes `edge`, the image `compose.yaml` names on `main`.
+
+The tag then attaches the install files to the GitHub release `v1.2.3`, which it creates with generated notes if it
+does not exist yet (edit them afterwards): `compose.yaml` with the sidecar image pinned to `1.2.3`, `env.example`
+(`.env.example`; GitHub renames assets with a leading dot) and the overrides `compose.behind-proxy.yaml` and
+`compose.exposure.yaml`. The README installs and upgrades from `releases/latest/download/`, so every release needs
+them. A tag with a suffix (`v1.3.0-rc.1`) makes a pre-release, which those links skip.
 
 The README's screenshots come from `./dev screenshots`.

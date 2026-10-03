@@ -1,11 +1,16 @@
 # Behind your own reverse proxy (Caddy, nginx, Traefik, ...): the proxy terminates HTTPS for DOMAIN and forwards to
-# the sidecar's plain HTTP on 127.0.0.1:8080. Use it on top of compose.yaml:
+# the sidecar's plain HTTP on 127.0.0.1:8080. Use it on top of compose.yaml: put it next to it, and add this line to
+# .env, so that every docker compose command (upgrades included) uses both files:
 #
-#   docker compose -f compose.yaml -f deploy/compose.behind-proxy.yaml up -d
+#   COMPOSE_FILE=compose.yaml:compose.behind-proxy.yaml
+#
+# (In a checkout of the repository: docker compose -f compose.yaml -f deploy/compose.behind-proxy.yaml up -d.)
 #
 # The proxy must pass Host and set X-Forwarded-For and X-Forwarded-Proto, and keep long responses (the live event
 # stream) unbuffered. TRUSTED_PROXIES is the proxy's address as the sidecar sees it: for a proxy on this host, the
-# stack network's gateway (MTX_SUBNET's .1). Proxy examples: docs/behind-a-proxy.md.
+# stack network's gateway (MTX_SUBNET's .1). The stack network is pinned to MTX_SUBNET, and the sidecar is told so:
+# it cannot tell from its own interfaces once it is on a second network too (Traefik's). Proxy examples:
+# docs/behind-a-proxy.md.
 services:
   sidecar:
     environment:
