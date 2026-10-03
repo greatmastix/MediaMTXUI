@@ -183,12 +183,25 @@ func newServer(addr string, h http.Handler, log *slog.Logger) *http.Server {
 	// No WriteTimeout: SSE and streamed downloads (later phases) are long-lived responses.
 	return &http.Server{
 		Addr:              addr,
-		Handler:           h,
+		Handler:           closeAfterChunked(h),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    64 << 10,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
+}
+
+// closeAfterChunked ends the connection after every request with a chunked body. A request with both Content-Length
+// and Transfer-Encoding must end its connection (RFC 9112 6.3), or a proxy in front that framed it by the length
+// could slip a second request past it; net/http drops the Content-Length before handlers see the request, so every
+// chunked request counts. Browsers do not send chunked bodies, and a reverse proxy re-frames what it forwards.
+func closeAfterChunked(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(r.TransferEncoding) > 0 {
+			w.Header().Set("Connection", "close")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func shutdown(servers []*http.Server, log *slog.Logger) {

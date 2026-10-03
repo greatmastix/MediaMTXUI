@@ -252,9 +252,18 @@ func (h *harness) completeSetup() {
 
 func TestSecurityHeaders(t *testing.T) {
 	h := newHarness(t, nil, fast)
-	for _, path := range []string{"/", "/some/route", "/api/v1/health", "/api/v1/nope", "/api/v1/session"} {
-		rec := h.do("GET", path, nil)
+	// Downloads and the event stream are GETs that a cookie may reach from another site (SameSite=Lax); their
+	// answers must stay unreadable there: no CORS, and Cross-Origin-Resource-Policy same-origin.
+	for _, path := range []string{
+		"/", "/some/route", "/api/v1/health", "/api/v1/nope", "/api/v1/session", "/api/v1/backups/x.mtxbak/download",
+		"/api/v1/audit/export", "/api/v1/logs/download", "/api/v1/recordings/export?path=test",
+	} {
+		rec := h.do("GET", path, nil, header("Origin", "https://evil.example"))
 		hdr := rec.Header()
+		if hdr.Get("Cross-Origin-Resource-Policy") != "same-origin" || hdr.Get("Access-Control-Allow-Origin") != "" ||
+			hdr.Get("Access-Control-Allow-Credentials") != "" {
+			t.Errorf("%s: readable from another origin: %v", path, hdr)
+		}
 		if !strings.Contains(hdr.Get("Content-Security-Policy"), "default-src 'self'") ||
 			!strings.Contains(hdr.Get("Content-Security-Policy"), "frame-ancestors 'none'") ||
 			hdr.Get("X-Content-Type-Options") != "nosniff" || hdr.Get("Referrer-Policy") != "same-origin" ||
