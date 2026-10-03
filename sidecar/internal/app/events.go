@@ -78,6 +78,9 @@ func (c *streamCount) release(user int64) {
 // (sign-out elsewhere, expiry, a disabled user or a changed role), after which the stream closes.
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	cur, _ := current(r.Context())
+	// Taken before anything is sent, held across passes, and taken anew only once it fired: a sign-out right after
+	// the snapshot, or while this stream is busy sending, still counts rather than waiting for the next recheck.
+	nudged := s.sessionNudge.wait()
 	uid := cur.user.ID
 	if !s.streams.acquire(uid) {
 		writeError(w, http.StatusTooManyRequests, "too_many_streams", "Too many open live views for this user. Close some tabs.")
@@ -139,9 +142,6 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		_, user, err := s.d.Sessions.Lookup(r.Context(), cur.token)
 		return errors.Is(err, auth.ErrNoSession) || (err == nil && (user.Role != cur.user.Role || user.ID != uid))
 	}
-	// Held across passes, and taken anew only once it fired: a sign-out while this stream is busy sending still counts,
-	// rather than waiting for the next recheck.
-	nudged := s.sessionNudge.wait()
 	for {
 		var check bool
 		select {
