@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -118,5 +120,28 @@ func TestOrderLocations(t *testing.T) {
 	}
 	if loc := post("/other").Get("Location"); loc != "" {
 		t.Errorf("not an order: %q", loc)
+	}
+}
+
+// Each ACME directory has its own cache, so leaving the staging server gets a real certificate at once.
+func TestACMECacheDir(t *testing.T) {
+	const (
+		prod    = "https://acme-v02.api.letsencrypt.org/directory"
+		staging = "https://acme-staging-v02.api.letsencrypt.org/directory"
+	)
+	p, s := acmeCacheDir("/data/state", prod), acmeCacheDir("/data/state", staging)
+	if p == s || p != acmeCacheDir("/data/state", prod) {
+		t.Fatalf("prod %s, staging %s", p, s)
+	}
+	if !strings.HasPrefix(p, "/data/state/acme/acme-v02.api.letsencrypt.org-") {
+		t.Errorf("prod cache %s", p)
+	}
+	// Two directories on one host, and a host with a port or odd characters, stay apart and inside state/acme.
+	a, b := acmeCacheDir("/s", "https://ca.lan:9000/acme/one/directory"), acmeCacheDir("/s", "https://ca.lan:9000/acme/two/directory")
+	if a == b || !strings.HasPrefix(a, "/s/acme/ca.lan_9000-") {
+		t.Errorf("one host: %s, %s", a, b)
+	}
+	if d := acmeCacheDir("/s", "https://../..%2f@evil/directory"); filepath.Dir(d) != "/s/acme" {
+		t.Errorf("odd host escapes: %s", d)
 	}
 }

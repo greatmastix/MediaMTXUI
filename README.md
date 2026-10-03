@@ -54,15 +54,7 @@ the address and key it shows.
 > [!TIP]
 > Trying it out? Add `ACME_DIRECTORY=https://acme-staging-v02.api.letsencrypt.org/directory` to `.env` to use
 > Let's Encrypt's staging server, which has generous rate limits (browsers will warn about its certificate).
-> The staging certificate stays in the state volume, and the sidecar keeps serving it until it is due for renewal,
-> weeks later. To switch to the real one, remove the line from `.env`, delete the cached certificate, and start
-> again:
->
-> ```bash
-> docker compose stop sidecar
-> docker run --rm -v mediamtx-ui_data-state:/state busybox rm -rf /state/acme
-> docker compose up -d
-> ```
+> To switch to the real certificate, remove the line and run `docker compose up -d` again.
 
 ### Ports
 

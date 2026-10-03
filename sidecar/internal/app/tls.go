@@ -3,13 +3,16 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,9 +26,27 @@ import (
 )
 
 // HTTPS for the public install (MTXUI_TLS=acme): certificates for PUBLIC_URL's host from an ACME CA (Let's Encrypt),
-// obtained on the first HTTPS request and renewed before they expire (x/crypto's autocert), cached in state/acme.
+// obtained on the first HTTPS request and renewed before they expire (x/crypto's autocert), cached in state/acme/,
+// one directory per ACME directory: switching from Let's Encrypt's staging server to the real one gets a new
+// certificate, not the cached staging one until its renewal.
 // The CA proves the domain with HTTP-01 on the plain listener (published as port 80) or TLS-ALPN-01 on the HTTPS
 // one (443); everything else on the plain listener is redirected to PUBLIC_URL.
+
+// acmeCacheDir is where the account and certificates from one ACME directory are kept: state/acme/<host>-<hash>, the
+// host for people and a hash of the whole URL for two directories on one host.
+func acmeCacheDir(stateDir, directory string) string {
+	host := "directory"
+	if u, err := url.Parse(directory); err == nil && u.Host != "" {
+		host = strings.Map(func(r rune) rune {
+			if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '-' {
+				return r
+			}
+			return '_'
+		}, strings.ToLower(u.Host))
+	}
+	sum := sha256.Sum256([]byte(directory))
+	return filepath.Join(stateDir, "acme", host+"-"+hex.EncodeToString(sum[:4]))
+}
 
 // ACME returns the HTTPS listener's TLS config and the plain listener's handler.
 func ACME(cfg *settings.Settings) (*tls.Config, http.Handler, error) {
@@ -46,7 +67,7 @@ func ACME(cfg *settings.Settings) (*tls.Config, http.Handler, error) {
 	m := &autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
 		HostPolicy: autocert.HostWhitelist(cfg.PublicURL.Hostname()),
-		Cache:      autocert.DirCache(filepath.Join(cfg.StateDir(), "acme")),
+		Cache:      autocert.DirCache(acmeCacheDir(cfg.StateDir(), cfg.ACMEDirectory)),
 		Email:      cfg.ACMEEmail,
 		Client:     client,
 	}
