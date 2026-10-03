@@ -139,6 +139,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		_, user, err := s.d.Sessions.Lookup(r.Context(), cur.token)
 		return errors.Is(err, auth.ErrNoSession) || (err == nil && (user.Role != cur.user.Role || user.ID != uid))
 	}
+	// Held across passes, and taken anew only once it fired: a sign-out while this stream is busy sending still counts,
+	// rather than waiting for the next recheck.
+	nudged := s.sessionNudge.wait()
 	for {
 		var check bool
 		select {
@@ -157,8 +160,8 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-recheck.C:
 			check = true
-		case <-s.sessionNudge.wait():
-			check = true
+		case <-nudged:
+			nudged, check = s.sessionNudge.wait(), true
 		}
 		if check && ended() {
 			send("event: session\ndata: {\"state\":\"ended\"}\n\n")

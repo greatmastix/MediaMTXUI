@@ -29,7 +29,13 @@ services:
     image: mediamtx-ui:dev # the sidecar's image, built by compose.test.yml, which carries the helper
     pull_policy: never
     depends_on: [sidecar]
-    healthcheck: { disable: true } # the image's healthcheck is the sidecar's
+    # Healthy once the helper has written its status. (Not disabled: older Compose refuses `up --wait` for a service
+    # whose healthcheck is off, as GitHub's runners showed.)
+    healthcheck:
+      test: ["CMD", "/usr/libexec/mtxui/mtx-portgate", "-policy", "/etc/mtx-portgate/policy.json", "status"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
     entrypoint: ["/usr/libexec/mtxui/mtx-portgate", "-policy", "/etc/mtx-portgate/policy.json", "-every", "1s", "apply"]
     user: "10002:10002"
     read_only: true

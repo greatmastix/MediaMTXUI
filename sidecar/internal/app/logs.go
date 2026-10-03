@@ -92,6 +92,7 @@ func (s *Server) logsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.d.Logs.Unsubscribe(tail)
+	nudged := s.sessionNudge.wait() // held across passes, as in events: a sign-out while busy still counts
 	backlog, err := s.searchLogs(r, f, logBacklog)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "The log could not be read.")
@@ -158,8 +159,8 @@ func (s *Server) logsStream(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-recheck.C:
 			check = true
-		case <-s.sessionNudge.wait():
-			check = true
+		case <-nudged:
+			nudged, check = s.sessionNudge.wait(), true
 		}
 		if check {
 			_, user, err := s.d.Sessions.Lookup(r.Context(), cur.token)
