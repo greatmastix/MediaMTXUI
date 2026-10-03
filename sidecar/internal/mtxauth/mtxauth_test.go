@@ -363,12 +363,12 @@ func TestSessionsOf(t *testing.T) {
 	}
 	var o opened
 	for i := range maxOpened + 5 {
-		o.add(1, SessionRef{Protocol: "rtsp", ID: fmt.Sprint(i)}, time.Unix(int64(i), 0))
+		o.add(subject{cred: 1}, SessionRef{Protocol: "rtsp", ID: fmt.Sprint(i)}, time.Unix(int64(i), 0))
 	}
-	if o.n != maxOpened || len(o.byCred[1]) != maxOpened {
+	if o.n != maxOpened || len(o.by[subject{cred: 1}]) != maxOpened {
 		t.Errorf("bound: n=%d", o.n)
 	}
-	if _, ok := o.byCred[1][SessionRef{Protocol: "rtsp", ID: "0"}]; ok {
+	if _, ok := o.by[subject{cred: 1}][SessionRef{Protocol: "rtsp", ID: "0"}]; ok {
 		t.Error("the oldest entry survived")
 	}
 }
@@ -398,10 +398,12 @@ func TestViewerTickets(t *testing.T) {
 	if d := f.h.Decide(ctx, ok); d.Allow {
 		t.Error("an expired ticket was accepted")
 	}
-	// Issuing prunes expired tickets.
-	f.h.Viewers.Issue("cam1", "bob", client)
-	if len(f.h.Viewers.m) != 1 {
-		t.Errorf("%d tickets kept", len(f.h.Viewers.m))
+	// Issuing prunes expired tickets, now and then.
+	for range ticketSweep {
+		f.h.Viewers.Issue("cam1", "bob", client)
+	}
+	if _, ok := f.h.Viewers.m[user]; ok || len(f.h.Viewers.m) > ticketSweep {
+		t.Errorf("%d tickets kept, the expired one among them: %v", len(f.h.Viewers.m), ok)
 	}
 	if strings.Contains(f.logs.String(), secret) {
 		t.Error("a ticket secret reached the log")

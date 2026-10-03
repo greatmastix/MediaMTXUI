@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"mtxui/internal/auth"
 	"mtxui/internal/auth/clientip"
 	"mtxui/internal/liveproxy"
 	"mtxui/internal/pathname"
@@ -51,6 +53,109 @@ func (s *Server) watchWHEP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) watchWHEPSession(w http.ResponseWriter, r *http.Request) {
 	s.d.Watch.WHEPSession(w, r, s.viewer(r), chi.URLParam(r, "id"))
+}
+
+// mayWatchAs reports whether user u may watch path: viewers and up watch anything, streamers their own.
+func (s *Server) mayWatchAs(ctx context.Context, u store.User, path string) bool {
+	if auth.Role(u.Role).AtLeast(auth.RoleViewer) {
+		return true
+	}
+	return s.loadOwners(ctx) == nil && s.ownsPath(u.ID, path)
+}
+
+// The access loop. MediaMTX checks access only when a session starts, so what the sidecar takes away later, it must
+// close itself. Every accessEvery, and at once when sessions or users change (sign-out, signing out everywhere, a
+// password change, disabling, deleting, a new role), it ends the live view's WebRTC sessions whose UI session has
+// ended or whose user may no longer watch the path (an owner change is noticed on the next round); HLS needs nothing,
+// as the proxy checks every request. It disconnects what expired guest keys opened, and lets the WHEP proxy forget
+// sessions MediaMTX has ended. (mtxauth.Handler.RunSessions does the same for public streams made private.)
+const (
+	accessEvery = 10 * time.Second
+	// whepGrace is how long a new WHEP session may go unlisted by MediaMTX before the proxy forgets it: the hub polls
+	// every 1 to 5 s, and MediaMTX drops a session whose peer never connects after its handshake timeout (10 s).
+	whepGrace = time.Minute
+)
+
+// RunAccess runs the access loop until ctx ends.
+func (s *Server) RunAccess(ctx context.Context) {
+	t := time.NewTicker(accessEvery)
+	defer t.Stop()
+	for {
+		nudged := s.sessionNudge.wait() // before the round: a change during it brings the next one forward
+		s.checkAccess(ctx, time.Now())
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		case <-nudged:
+		}
+	}
+}
+
+func (s *Server) checkAccess(ctx context.Context, now time.Time) {
+	s.endExpiredGuests(ctx, now)
+	type viewer struct {
+		user  store.User
+		alive bool
+		err   error
+	}
+	var ended, gone []string
+	viewers := map[string]viewer{} // by UI session key
+	for _, ws := range s.d.Watch.Sessions() {
+		if ws.MediaMTX != "" && now.Sub(ws.Started) > whepGrace {
+			if listed, fresh := s.d.Live.Listed("webrtc", ws.MediaMTX); fresh && !listed {
+				gone = append(gone, ws.ID)
+				continue
+			}
+		}
+		if ws.Viewer == "" {
+			continue // an external client's: revoking its credential closes it (credentialRevoke, retireKey)
+		}
+		v, seen := viewers[ws.Viewer]
+		if !seen {
+			v.user, v.alive, v.err = s.viewerOf(ctx, ws.Viewer)
+			viewers[ws.Viewer] = v
+		}
+		if v.err == nil && (!v.alive || !s.mayWatchAs(ctx, v.user, ws.Path)) {
+			ended = append(ended, ws.ID)
+		}
+	}
+	s.d.Watch.Forget(gone)
+	closed := 0
+	for _, id := range ended {
+		if err := s.d.Watch.End(ctx, id); err != nil {
+			s.d.Log.Warn("closing a live view", "err", err)
+			continue
+		}
+		closed++
+	}
+	if closed > 0 {
+		s.d.Log.Info("live views closed: their session ended or they may no longer watch", "sessions", closed)
+	}
+}
+
+// viewerOf returns the user of the UI session with key (its IDHash), and whether that session is still alive by the
+// rules of auth.Sessions.Lookup: not deleted, expired or idle, and its user neither deleted nor disabled.
+func (s *Server) viewerOf(ctx context.Context, key string) (store.User, bool, error) {
+	sess, err := s.d.Store.SessionByHash(ctx, key)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.User{}, false, nil
+	}
+	if err != nil {
+		return store.User{}, false, err
+	}
+	now := s.d.Store.Now()
+	if !now.Before(sess.ExpiresAt) || !now.Before(sess.LastSeenAt.Add(s.d.Settings.SessionIdleTimeout)) {
+		return store.User{}, false, nil
+	}
+	u, err := s.d.Store.UserByID(ctx, sess.UserID)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.User{}, false, nil
+	}
+	if err != nil {
+		return store.User{}, false, err
+	}
+	return u, !u.Disabled, nil
 }
 
 // External WHIP and WHEP for clients outside the UI (OBS, players, other servers): /whip/<path> publishes,

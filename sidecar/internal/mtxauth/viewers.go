@@ -18,6 +18,15 @@ const ViewerPrefix = "mtxui-viewer-"
 // ticketTTL covers starting a session: MediaMTX authenticates HLS once per session and WHEP once per offer.
 const ticketTTL = 60 * time.Second
 
+// Anyone may start sessions on a public stream, so tickets are bounded: expired ones are swept once as many have been
+// issued as the store holds (each sweep paid for by the tickets before it, never a scan per ticket, under the lock
+// that every check takes too), and beyond maxTickets live ones an arbitrary one goes. Tickets are used within
+// milliseconds of being issued, so the one that goes has almost certainly done its work.
+const (
+	ticketSweep = 1024
+	maxTickets  = 100_000
+)
+
 type ticket struct {
 	secret  string
 	path    string
@@ -28,9 +37,10 @@ type ticket struct {
 
 // Viewers issues and checks viewer tickets.
 type Viewers struct {
-	mu  sync.Mutex
-	m   map[string]ticket
-	now func() time.Time
+	mu     sync.Mutex
+	m      map[string]ticket
+	issued int // since the last sweep
+	now    func() time.Time
 }
 
 // NewViewers returns an empty ticket store.
@@ -45,9 +55,18 @@ func (v *Viewers) Issue(path, uiUser string, client netip.Addr) (user, secret st
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	now := v.now()
-	for k, t := range v.m { // tickets are few and short-lived: prune on the way
-		if now.After(t.expires) {
+	if v.issued++; v.issued >= max(ticketSweep, len(v.m)) {
+		for k, t := range v.m {
+			if now.After(t.expires) {
+				delete(v.m, k)
+			}
+		}
+		v.issued = 0
+	}
+	if len(v.m) >= maxTickets {
+		for k := range v.m { // map order is random
 			delete(v.m, k)
+			break
 		}
 	}
 	v.m[user] = ticket{secret: secret, path: path, client: client.Unmap(), uiUser: uiUser, expires: now.Add(ticketTTL)}

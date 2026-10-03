@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"mtxui/internal/auth/clientip"
 	"mtxui/internal/pathname"
 )
 
@@ -39,7 +40,8 @@ type Viewer struct {
 	Client  netip.Addr
 }
 
-func (v Viewer) key() string {
+// Key is the hash of the UI session, as the session store keys it (store.Session.IDHash).
+func (v Viewer) Key() string {
 	sum := sha256.Sum256([]byte(v.Session))
 	return hex.EncodeToString(sum[:])
 }
@@ -49,11 +51,16 @@ type Proxy struct {
 	hls, webrtc string // e.g. http://mediamtx:8888
 	tickets     Tickets
 	client      *http.Client
+	now         func() time.Time
+
+	jarMu    sync.Mutex          // every HLS request takes it: never held for long
+	cookies  map[string]jarEntry // viewer key + path -> MediaMTX's hlsSession cookie
+	jarAdded int                 // cookies set since the jar was last swept
 
 	mu       sync.Mutex
-	cookies  map[string]jarEntry // viewer key + path -> MediaMTX's hlsSession cookie
-	sessions map[string]whep     // our WHEP session id -> the upstream session
-	now      func() time.Time
+	sessions map[string]whep // our WHEP session id -> the upstream session
+	buckets  map[string]int  // sessions per bucket (whep.bucket)
+	external int             // external clients' sessions
 }
 
 type jarEntry struct {
@@ -62,15 +69,23 @@ type jarEntry struct {
 }
 
 type whep struct {
-	owner    string // viewer key
+	owner    string // viewer key, or externalOwner
 	upstream string // MediaMTX's session URL, absolute
+	mtxID    string // MediaMTX's session id (its API lists and kicks sessions by it), or "" if it sent none
+	path     string
+	bucket   string // what the per-client bound counts: the UI session, or an external client's address (RateKey)
 	created  time.Time
 }
 
-// Limits.
+// Limits. The proxy keeps a session until its owner ends it or MediaMTX no longer lists it (Forget, from the
+// sidecar's access loop). Anonymous offers on a public stream cost an entry each, so entries are bounded per client
+// and in all (addLocked, roomFor). An external session whose entry goes keeps its media flowing, but can no longer
+// trickle or end through the proxy (MediaMTX closes it when the peer goes away).
 const (
 	jarIdle      = 2 * time.Minute // an HLS player reloads every few seconds; this long without a request, it is gone
-	whepMaxAge   = 12 * time.Hour  // a forgotten WHEP session entry is dropped (MediaMTX closes the session by itself)
+	jarSweep     = 1024            // the jar is swept for idle cookies after this many new ones, or as many as it holds
+	maxSessions  = 10000
+	maxPerClient = 64 // per UI session or external client address; a page has at most nine players
 	maxOffer     = 64 << 10
 	maxPatch     = 16 << 10
 	upstreamWait = 20 * time.Second // low-latency HLS holds blocking playlist reloads for a few seconds
@@ -83,7 +98,7 @@ func New(hls, webrtc string, tickets Tickets) *Proxy {
 		client: &http.Client{Timeout: upstreamWait, CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}},
-		cookies: map[string]jarEntry{}, sessions: map[string]whep{}, now: time.Now,
+		cookies: map[string]jarEntry{}, sessions: map[string]whep{}, buckets: map[string]int{}, now: time.Now,
 	}
 }
 
@@ -133,7 +148,7 @@ func (p *Proxy) HLS(w http.ResponseWriter, r *http.Request, v Viewer, path, file
 	if len(q) > 0 {
 		target += "?" + q.Encode()
 	}
-	jarKey := v.key() + "\x00" + path
+	jarKey := v.Key() + "\x00" + path
 	var resp *http.Response
 	// MediaMTX checks for cookie support with a redirect to ?cookieCheck=1 and then sets its session cookie; the
 	// proxy plays the browser's part (twice at most) and keeps the cookie.
@@ -143,8 +158,13 @@ func (p *Proxy) HLS(w http.ResponseWriter, r *http.Request, v Viewer, path, file
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		user, secret := p.tickets.Issue(path, v.User, v.Client)
-		req.SetBasicAuth(user, secret)
+		// Only the multivariant playlist starts a MediaMTX session, which authenticates once (v1.21.1); media
+		// playlists and segments ride on its cookie, and MediaMTX never looks at credentials for them. A ticket for
+		// every request would mint one per segment, for anyone watching a public stream.
+		if file == "index.m3u8" {
+			user, secret := p.tickets.Issue(path, v.User, v.Client)
+			req.SetBasicAuth(user, secret)
+		}
 		req.Header.Set("X-Forwarded-For", v.Client.String())
 		if c := p.cookie(jarKey); c != "" {
 			// Request cookies to MediaMTX: Secure, HttpOnly and SameSite are response-cookie attributes and mean nothing here.
@@ -188,8 +208,8 @@ func (p *Proxy) HLS(w http.ResponseWriter, r *http.Request, v Viewer, path, file
 }
 
 func (p *Proxy) cookie(key string) string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.jarMu.Lock()
+	defer p.jarMu.Unlock()
 	e, ok := p.cookies[key]
 	if !ok || p.now().Sub(e.used) > jarIdle {
 		delete(p.cookies, key)
@@ -201,13 +221,18 @@ func (p *Proxy) cookie(key string) string {
 }
 
 func (p *Proxy) setCookie(key, value string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.jarMu.Lock()
+	defer p.jarMu.Unlock()
 	now := p.now()
-	for k, e := range p.cookies {
-		if now.Sub(e.used) > jarIdle {
-			delete(p.cookies, k)
+	// Idle cookies are swept once as many new ones have been set as the jar holds: the cookies before a sweep pay for
+	// it, rather than every new HLS session scanning the whole jar.
+	if p.jarAdded++; p.jarAdded >= max(jarSweep, len(p.cookies)) {
+		for k, e := range p.cookies {
+			if now.Sub(e.used) > jarIdle {
+				delete(p.cookies, k)
+			}
 		}
+		p.jarAdded = 0
 	}
 	p.cookies[key] = jarEntry{cookie: value, used: now}
 }
@@ -215,7 +240,7 @@ func (p *Proxy) setCookie(key, value string) {
 // WHEPOffer starts a WebRTC session for a signed-in viewer: the browser's SDP offer goes to MediaMTX with a viewer
 // ticket, the answer comes back with a session URL of the proxy's own (for trickle ICE and to end the session).
 func (p *Proxy) WHEPOffer(w http.ResponseWriter, r *http.Request, v Viewer, path, sessionBase string) {
-	p.offer(w, r, "whep", path, v.key(), v.Client, sessionBase, func(req *http.Request) {
+	p.offer(w, r, "whep", path, v.Key(), v.Client, sessionBase, func(req *http.Request) {
 		user, secret := p.tickets.Issue(path, v.User, v.Client)
 		req.SetBasicAuth(user, secret)
 	})
@@ -245,6 +270,10 @@ func (p *Proxy) offer(w http.ResponseWriter, r *http.Request, kind, path, owner 
 	}
 	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/sdp") {
 		http.Error(w, "send an SDP offer", http.StatusUnsupportedMediaType)
+		return
+	}
+	if owner != externalOwner && !p.roomFor(owner) {
+		http.Error(w, "too many live views at once", http.StatusTooManyRequests)
 		return
 	}
 	offer, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxOffer))
@@ -296,14 +325,15 @@ func (p *Proxy) offer(w http.ResponseWriter, r *http.Request, kind, path, owner 
 		http.Error(w, "MediaMTX sent an unexpected session URL", http.StatusBadGateway)
 		return
 	}
-	p.mu.Lock()
-	now := p.now()
-	for k, s := range p.sessions {
-		if now.Sub(s.created) > whepMaxAge {
-			delete(p.sessions, k)
-		}
+	s := whep{owner: owner, upstream: loc.String(), path: path, bucket: owner, created: p.now()}
+	if mtxID := resp.Header.Get("ID"); uuidString.MatchString(mtxID) {
+		s.mtxID = mtxID
 	}
-	p.sessions[id] = whep{owner: owner, upstream: loc.String(), created: now}
+	if owner == externalOwner {
+		s.bucket = clientip.RateKey(client)
+	}
+	p.mu.Lock()
+	p.addLocked(id, s)
 	p.mu.Unlock()
 
 	h := w.Header()
@@ -324,7 +354,7 @@ func (p *Proxy) offer(w http.ResponseWriter, r *http.Request, kind, path, owner 
 
 // WHEPSession forwards trickle ICE (PATCH) and the end of a session (DELETE) for the viewer who started it.
 func (p *Proxy) WHEPSession(w http.ResponseWriter, r *http.Request, v Viewer, id string) {
-	p.session(w, r, v.key(), v.Client, id)
+	p.session(w, r, v.Key(), v.Client, id)
 }
 
 // ExternalSession does the same for an external client's session, which its id alone identifies.
@@ -336,7 +366,7 @@ func (p *Proxy) session(w http.ResponseWriter, r *http.Request, owner string, cl
 	p.mu.Lock()
 	s, ok := p.sessions[id]
 	if ok && s.owner == owner && r.Method == http.MethodDelete {
-		delete(p.sessions, id)
+		p.removeLocked(id)
 	}
 	p.mu.Unlock()
 	if !ok || s.owner != owner {
@@ -377,6 +407,118 @@ func (p *Proxy) session(w http.ResponseWriter, r *http.Request, owner string, cl
 	defer resp.Body.Close()
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, io.LimitReader(resp.Body, maxPatch))
+}
+
+// roomFor reports whether a UI session may start another live view. The live view's entries are never evicted: the
+// access loop needs them to close the views of a user whose access ends. So a UI session past its bound is refused,
+// and so is everyone once the proxy is full of live views alone.
+func (p *Proxy) roomFor(owner string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.buckets[owner] < maxPerClient && (len(p.sessions) < maxSessions || p.external > 0)
+}
+
+// addLocked keeps a session within the bounds: an external client's oldest entry goes when it has too many, and the
+// oldest external entry when the proxy is full. External entries only carry trickle ICE and the end of a session:
+// revoking a credential or making a stream private finds those sessions through the authentication endpoint. Only a
+// bound costs a scan.
+func (p *Proxy) addLocked(id string, s whep) {
+	p.removeLocked(id) // MediaMTX's ids are random; never counted twice all the same
+	if s.owner == externalOwner && p.buckets[s.bucket] >= maxPerClient {
+		p.removeLocked(p.oldestLocked(func(o whep) bool { return o.bucket == s.bucket }))
+	}
+	if len(p.sessions) >= maxSessions {
+		p.removeLocked(p.oldestLocked(func(o whep) bool { return o.owner == externalOwner }))
+	}
+	p.sessions[id] = s
+	p.buckets[s.bucket]++
+	if s.owner == externalOwner {
+		p.external++
+	}
+}
+
+func (p *Proxy) oldestLocked(match func(whep) bool) string {
+	var id string
+	var at time.Time
+	for k, s := range p.sessions {
+		if match(s) && (id == "" || s.created.Before(at)) {
+			id, at = k, s.created
+		}
+	}
+	return id
+}
+
+func (p *Proxy) removeLocked(id string) {
+	s, ok := p.sessions[id]
+	if !ok {
+		return
+	}
+	delete(p.sessions, id)
+	if p.buckets[s.bucket]--; p.buckets[s.bucket] <= 0 {
+		delete(p.buckets, s.bucket)
+	}
+	if s.owner == externalOwner {
+		p.external--
+	}
+}
+
+// Session is a WHEP or WHIP session the proxy keeps, as the sidecar's access loop sees it.
+type Session struct {
+	ID       string // the proxy's own id, in the session URL it handed out
+	MediaMTX string // MediaMTX's session id, as its API lists the session; "" if MediaMTX sent none
+	Path     string
+	Viewer   string // the UI session's key (Viewer.Key) for the live view's sessions; "" for external clients
+	Started  time.Time
+}
+
+// Sessions lists the sessions the proxy keeps.
+func (p *Proxy) Sessions() []Session {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]Session, 0, len(p.sessions))
+	for id, s := range p.sessions {
+		viewer := s.owner
+		if viewer == externalOwner {
+			viewer = ""
+		}
+		out = append(out, Session{ID: id, MediaMTX: s.mtxID, Path: s.path, Viewer: viewer, Started: s.created})
+	}
+	return out
+}
+
+// Forget drops sessions that have ended (MediaMTX no longer lists them).
+func (p *Proxy) Forget(ids []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, id := range ids {
+		p.removeLocked(id)
+	}
+}
+
+// End closes a session as its owner's DELETE would, and forgets it: for a viewer who may no longer watch.
+func (p *Proxy) End(ctx context.Context, id string) error {
+	p.mu.Lock()
+	s, ok := p.sessions[id]
+	p.removeLocked(id)
+	p.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, s.upstream, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound { // 404: it had ended already
+		return errors.New("MediaMTX answered " + resp.Status)
+	}
+	return nil
 }
 
 // UpstreamLocation is what WHEPOffer keeps for a session; for tests.

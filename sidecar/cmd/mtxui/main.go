@@ -302,6 +302,8 @@ func start(ctx context.Context, cfg *settings.Settings, log *slog.Logger, logHub
 		go exposure.Watch(ctx, time.Second, func(portgate.View) { hub.SetExtra("exposure", auth.RoleAdmin, srv.ExposureLive(ctx)) })
 		go srv.RunAutoExpose(ctx)
 	}
+	go srv.RunAccess(ctx)                    // closes live views, guest sessions and the like whose access has ended
+	go mtxAuth.RunSessions(ctx, mtxAPI, hub) // disconnects anonymous readers of streams made private
 	go srv.RunRecordings(ctx)
 	go srv.RunHistory(ctx)
 	go srv.RunBackups(ctx)

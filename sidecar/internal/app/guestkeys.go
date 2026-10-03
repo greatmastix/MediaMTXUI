@@ -208,7 +208,8 @@ func (s *Server) retireGuestKeys(ctx context.Context, streamID int64) int {
 }
 
 // endExpiredGuests disconnects what guest keys opened once they have expired: MediaMTX checks a key only when a
-// connection starts, so a guest stream would otherwise run on past its key.
+// connection starts, so a guest stream would otherwise run on past its key. The access loop (RunAccess) calls it
+// whether or not exposure control is on.
 func (s *Server) endExpiredGuests(ctx context.Context, now time.Time) {
 	list, err := s.d.Store.ExpiredGuestKeys(ctx, now.Add(-24*time.Hour), now)
 	if err != nil {

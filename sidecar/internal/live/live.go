@@ -77,9 +77,15 @@ const (
 	// SampleInterval is the spacing of the history samples.
 	SampleInterval = 5 * time.Second
 
-	historySize  = 720 // an hour of 5 s samples
-	ringSize     = 1024
-	subBuffer    = 256
+	historySize = 720 // an hour of 5 s samples
+	ringSize    = 1024
+	// ringBytes bounds the ring's event data too: the connection lists hold every TCP connection MediaMTX has
+	// accepted, before authentication, so anonymous clients can make each update megabytes long. A browser that
+	// falls off the ring resumes with a snapshot.
+	ringBytes = 16 << 20
+	subBuffer = 256
+	// subBytes is the event data one subscription may have waiting; beyond it, it is dropped like a full one.
+	subBytes     = 16 << 20
 	itemsPerPage = 1000
 	maxPages     = 20 // 20,000 items per list; beyond that the list is marked truncated
 	maxBody      = 32 << 20
@@ -126,12 +132,15 @@ type Hub struct {
 	wake      chan struct{}
 	active    time.Duration
 	idle      time.Duration
+	ringMax   int // ringBytes and subBytes; tests lower them
+	subMax    int
 
 	mu      sync.Mutex
 	seq     uint64
 	status  Status
 	lists   map[Kind]*list
-	ring    []Event // the last ringSize events, oldest first
+	ring    []Event // the last ringSize events, oldest first, holding at most ringMax bytes of data
+	ringLen int     // the ring's data, in bytes
 	subs    map[*Subscription]struct{}
 	closed  bool
 	history *history
@@ -160,6 +169,7 @@ func New(api string, principal Authorizer, ops []mtxapi.Operation, log *slog.Log
 		}},
 		wake: make(chan struct{}, 1), active: activeInterval, idle: idleInterval, lists: map[Kind]*list{}, subs: map[*Subscription]struct{}{},
 		status: Status{Since: time.Now()}, history: newHistory(historySize), extras: map[string]extra{},
+		ringMax: ringBytes, subMax: subBytes,
 	}
 	for _, s := range sources {
 		op, ok := byID[s.opID]
@@ -453,8 +463,16 @@ func (h *Hub) publishLocked(typ string, minRole auth.Role, payload any) {
 	h.seq++
 	ev := Event{ID: h.idLocked(), Type: typ, Data: data, minRole: minRole, seq: h.seq}
 	h.ring = append(h.ring, ev)
-	if len(h.ring) > ringSize {
-		h.ring = append(h.ring[:0], h.ring[len(h.ring)-ringSize:]...)
+	h.ringLen += len(data)
+	cut := 0 // an event larger than ringMax on its own leaves the ring empty: resumers get a snapshot
+	for cut < len(h.ring) && (len(h.ring)-cut > ringSize || h.ringLen > h.ringMax) {
+		h.ringLen -= len(h.ring[cut].Data)
+		cut++
+	}
+	if cut > 0 {
+		n := copy(h.ring, h.ring[cut:])
+		clear(h.ring[n:]) // the evicted events' data can go
+		h.ring = h.ring[:n]
 	}
 	for sub := range h.subs {
 		e := ev
@@ -466,8 +484,14 @@ func (h *Hub) publishLocked(typ string, minRole auth.Role, payload any) {
 		} else if !sub.role.AtLeast(minRole) {
 			continue
 		}
+		if !sub.roomLocked(len(e.Data), h.subMax) {
+			h.dropLocked(sub)
+			continue
+		}
 		select {
 		case sub.c <- e:
+			sub.queued = append(sub.queued, len(e.Data))
+			sub.queuedLen += len(e.Data)
 		default:
 			h.dropLocked(sub)
 		}
@@ -483,6 +507,21 @@ type Subscription struct {
 	c       chan Event
 	role    auth.Role
 	scope   Scope
+	// queued are the sizes of the events handed to c, oldest first, and queuedLen their sum; the ones the browser's
+	// stream has read since are the oldest len(queued)-len(c). Both change only with the hub locked.
+	queued    []int
+	queuedLen int
+}
+
+// roomLocked forgets the events the subscriber has read and reports whether n more bytes fit in what it has waiting,
+// within limit.
+func (sub *Subscription) roomLocked(n, limit int) bool {
+	read := max(0, len(sub.queued)-len(sub.c))
+	for _, b := range sub.queued[:read] {
+		sub.queuedLen -= b
+	}
+	sub.queued = sub.queued[read:]
+	return sub.queuedLen+n <= limit
 }
 
 // Scope decides which paths a scoped subscription sees. It is called for every event, so it must be cheap, and it
@@ -774,6 +813,29 @@ type Client struct {
 var clientProtocol = map[Kind]string{
 	"rtspSessions": "rtsp", "rtspsSessions": "rtsps", "rtmpConns": "rtmp", "rtmpsConns": "rtmps",
 	"srtConns": "srt", "webrtcSessions": "webrtc", "hlsSessions": "hls", "moqSessions": "moq",
+}
+
+// protocolKind is clientProtocol the other way round.
+var protocolKind = func() map[string]Kind {
+	m := map[string]Kind{}
+	for k, p := range clientProtocol {
+		m[p] = k
+	}
+	return m
+}()
+
+// Listed reports whether MediaMTX listed the session or connection of protocol (as its kick operations name them)
+// with id at the last poll. fresh is false when that answer means nothing: MediaMTX did not answer the last poll, or
+// the list was never read or was truncated.
+func (h *Hub) Listed(protocol, id string) (listed, fresh bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	l, ok := h.lists[protocolKind[protocol]]
+	if !ok || l.truncated || !h.status.Reachable {
+		return false, false
+	}
+	_, listed = l.items[id]
+	return listed, true
 }
 
 // ClientsOf lists the sessions and connections that MediaMTX last reported for user (the name a client

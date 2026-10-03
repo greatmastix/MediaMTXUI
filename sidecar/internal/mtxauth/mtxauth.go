@@ -101,7 +101,9 @@ type Handler struct {
 }
 
 // Throttling: failed attempts that carry credentials, per client address (IPv6 per /64). Anonymous probes are not
-// counted: every RTSP client makes one before sending credentials.
+// counted: every RTSP client makes one before sending credentials. A success does not clear an address's failures
+// (they age out with the window), or anyone holding one valid key, such as a guest's, could spend it every 19 guesses
+// and guess without limit.
 const (
 	throttleFailures = 20
 	throttleWindow   = 5 * time.Minute
@@ -155,8 +157,12 @@ func (h *Handler) Decide(ctx context.Context, req Request) Decision {
 		return h.deny(req, "", "unknown action", false)
 	}
 	if req.User == "" && req.Token == "" {
-		// A public stream may be watched by anyone: reading only, and only that path.
+		// A public stream may be watched by anyone: reading only, and only that path. The session is remembered, to
+		// be disconnected if the stream stops being public (RunSessions).
 		if req.Action == "read" && h.Public != nil && h.Public(req.Path) {
+			if req.ID != nil {
+				h.opened.add(subject{path: req.Path}, SessionRef{Protocol: req.Protocol, ID: *req.ID}, h.now())
+			}
 			return Decision{Allow: true, Who: "public"}
 		}
 		return Decision{Reason: "anonymous"} // expected before every credentialed RTSP attempt; not logged, not counted
@@ -202,10 +208,7 @@ func (h *Handler) Decide(ctx context.Context, req Request) Decision {
 	}
 	h.creds.Touch(c.ID)
 	if req.ID != nil {
-		h.opened.add(c.ID, SessionRef{Protocol: req.Protocol, ID: *req.ID}, h.now())
-	}
-	if !own {
-		h.throttle.Succeed(key)
+		h.opened.add(subject{cred: c.ID}, SessionRef{Protocol: req.Protocol, ID: *req.ID}, h.now())
 	}
 	if req.Action == "publish" && h.OnPublish != nil {
 		h.OnPublish(req.Path, ip)
@@ -245,4 +248,4 @@ func (h *Handler) deny(req Request, who, reason string, log bool) Decision {
 }
 
 // SessionsOf returns, and forgets, the sessions credential id has authenticated since the sidecar started.
-func (h *Handler) SessionsOf(id int64) []SessionRef { return h.opened.take(id) }
+func (h *Handler) SessionsOf(id int64) []SessionRef { return h.opened.take(subject{cred: id}) }

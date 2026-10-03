@@ -100,13 +100,7 @@ func (s *Server) IsPublicPath(path string) bool {
 // mayWatch reports whether the signed-in user may watch path: viewers and up watch anything, streamers their own.
 func (s *Server) mayWatch(r *http.Request, path string) bool {
 	cur, ok := current(r.Context())
-	if !ok {
-		return false
-	}
-	if auth.Role(cur.user.Role).AtLeast(auth.RoleViewer) {
-		return true
-	}
-	return s.loadOwners(r.Context()) == nil && s.ownsPath(cur.user.ID, path)
+	return ok && s.mayWatchAs(r.Context(), cur.user, path) // the access loop asks the same of open live views
 }
 
 // StreamOwner names a stream's owner.
