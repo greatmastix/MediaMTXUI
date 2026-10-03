@@ -1,11 +1,15 @@
 import '@testing-library/jest-dom/vitest'
-import { cleanup } from '@testing-library/react'
+import { cleanup, configure } from '@testing-library/react'
 import { afterEach } from 'vitest'
 
 // Vitest runs without globals, so Testing Library cannot register its own cleanup.
 afterEach(() => {
   cleanup()
 })
+
+// findBy and waitFor give up after 5 s instead of 1: `./dev ci` runs these next to the Go tests, and a page that
+// renders in 100 ms alone can take over a second there (and on CI's smaller runners).
+configure({ asyncUtilTimeout: 5000 })
 
 // jsdom has no matchMedia; the theme follows a system that prefers light.
 Object.defineProperty(window, 'matchMedia', {

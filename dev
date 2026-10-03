@@ -215,6 +215,9 @@ pins_check() {
   pin_in Dockerfile "ARG MEDIAMTX_VERSION=$MEDIAMTX_VERSION" || ok=1
   pin_in Dockerfile "ARG MEDIAMTX_IMAGE=$MEDIAMTX_IMAGE" || ok=1
   pin_in compose.yaml "    image: $MEDIAMTX_IMAGE" || ok=1
+  # release.yml pins this line to the tag's version in the release's copy; it must keep this shape.
+  # shellcheck disable=SC2016 # the literal ${MTXUI_VERSION:-edge}
+  pin_in compose.yaml '    image: ghcr.io/greatmastix/mediamtxui:${MTXUI_VERSION:-edge}' || ok=1
   pin_in spec/mediamtx/openapi.lock "version=$MEDIAMTX_VERSION" || ok=1
   pin_in e2e/package.json "\"@playwright/test\": \"$pw\"" || ok=1
   [[ $MEDIAMTX_IMAGE == "bluenviron/mediamtx:$MEDIAMTX_VERSION@sha256:"* ]] || {

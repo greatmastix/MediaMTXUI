@@ -819,7 +819,7 @@ func (s *Server) publicStream(w http.ResponseWriter, r *http.Request, name strin
 
 // publicStreamGet answers the watch link's page, for anyone.
 func (s *Server) publicStreamGet(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.publicStream(w, r, chi.URLParam(r, "*"))
+	st, ok := s.publicStream(w, r, param(r, "*"))
 	if !ok {
 		return
 	}
@@ -836,7 +836,7 @@ func (s *Server) publicStreamGet(w http.ResponseWriter, r *http.Request) {
 
 // publicHLS proxies a public stream's HLS for anyone (the watch link's fallback when WebRTC does not connect).
 func (s *Server) publicHLS(w http.ResponseWriter, r *http.Request) {
-	path, file, err := liveproxy.SplitHLS(chi.URLParam(r, "*"))
+	path, file, err := liveproxy.SplitHLS(param(r, "*"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid", "Invalid path or file.")
 		return

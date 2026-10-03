@@ -4,6 +4,7 @@ go 1.27.0
 
 require (
 	filippo.io/age v1.3.2
+	github.com/abema/go-mp4 v1.7.3
 	github.com/bluenviron/mediacommon/v2 v2.9.5
 	github.com/descope/virtualwebauthn v1.0.5
 	github.com/go-chi/chi/v5 v5.3.2
@@ -16,7 +17,6 @@ require (
 
 require (
 	filippo.io/hpke v0.4.0 // indirect
-	github.com/abema/go-mp4 v1.7.3 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.4 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect

@@ -126,7 +126,7 @@ func (p *Prober) Check(ctx context.Context) {
 	p.status = st
 	switch {
 	case st.Version != "" && st.Version != p.expected:
-		p.warnings["version"] = Warning{"version", fmt.Sprintf("MediaMTX is version %s, but this sidecar was built for %s. Deploy the matching pair.", st.Version, p.expected)}
+		p.warnings["version"] = Warning{"version", fmt.Sprintf("MediaMTX is version %s, but this sidecar was built for %s. Deploy the matching pair: download the release's compose.yaml (README: Upgrading).", st.Version, p.expected)}
 	default:
 		delete(p.warnings, "version")
 	}

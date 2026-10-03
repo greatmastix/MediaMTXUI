@@ -6,6 +6,7 @@
 //	                     [--expires 720h] [--kind password|token] [--secret-stdin] [--json]
 //	mtxui credential list [--json]
 //	mtxui credential revoke --name NAME
+//	mtxui reset-password --username NAME                     a one-time join code that sets a new password
 //
 // Exit codes: 0 success, 1 failure, 2 usage error, 3 already done (setup completed, credential exists).
 package cli
@@ -33,6 +34,8 @@ type Core struct {
 	Setup *setup.Service
 	Creds *credentials.Service
 	Audit *audit.Recorder
+	// JoinCode makes a join code for an account, as People's "Reset password" does (app.IssueJoinCode).
+	JoinCode func(ctx context.Context, st *store.Store, u store.User, by string) (string, time.Time, error)
 }
 
 // IO are the command's streams.
@@ -119,6 +122,50 @@ func Credential(ctx context.Context, c Core, args []string, io IO) int {
 		fmt.Fprintf(io.Err, "unknown subcommand %q: use add, list or revoke\n", args[0])
 		return exitUsage
 	}
+}
+
+// ResetPassword makes a one-time join code for an existing account, for when nobody can sign in to make one in the UI
+// (the only admin forgot the password, or lost the second factor and its recovery codes). Whoever enters the code on
+// the UI's join page chooses a new password and is signed in; the account's other sessions end. The old password keeps
+// working until then.
+func ResetPassword(ctx context.Context, c Core, args []string, io IO) int {
+	fs := flag.NewFlagSet("reset-password", flag.ContinueOnError)
+	fs.SetOutput(io.Err)
+	username := fs.String("username", "", "the account")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if *username == "" || fs.NArg() > 0 {
+		fmt.Fprintln(io.Err, "usage: mtxui reset-password --username NAME")
+		return exitUsage
+	}
+	st := c.Setup.Store
+	u, err := st.UserByName(ctx, *username)
+	if errors.Is(err, store.ErrNotFound) {
+		fmt.Fprintf(io.Err, "no account is named %q\n", *username)
+		return exitFailed
+	}
+	if err != nil {
+		fmt.Fprintln(io.Err, err)
+		return exitFailed
+	}
+	if u.Disabled {
+		fmt.Fprintf(io.Err, "%s is disabled; an admin can enable the account on People\n", u.Username)
+		return exitFailed
+	}
+	code, expires, err := c.JoinCode(ctx, st, u, "cli")
+	if err != nil {
+		fmt.Fprintln(io.Err, err)
+		return exitFailed
+	}
+	c.Audit.Record(ctx, store.AuditEvent{
+		Actor: "cli", Action: "user.join-code", Target: u.Username,
+		Details: map[string]any{"expires": expires, "via": "mtxui reset-password"},
+	})
+	fmt.Fprintf(io.Out, "Join code for %s: %s\n", u.Username, code)
+	fmt.Fprintf(io.Out, "It works once, until %s. Open the UI's /join page and enter it to choose a new password.\n",
+		expires.UTC().Format("2006-01-02 15:04 UTC"))
+	return exitOK
 }
 
 type credentialJSON struct {

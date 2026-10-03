@@ -86,7 +86,7 @@ type Server struct {
 	sessionNudge nudge
 	auto         autoExpose // automatic exposure: leases and what was last opened
 	forwardMu    sync.Mutex // one forwarding change at a time: each rewrites the path's whole forward list
-	holdingMu    sync.Mutex // one holding clip upload at a time
+	holdingMu    sync.Mutex // one change to a stream's holding screen at a time (an upload's commit, a patch, FollowEncoder, a deletion)
 	followed     sync.Map   // stream id -> when its holding version last followed its encoder
 	rec          recordingsState
 	flows        authFlows     // second-factor sign-ins, passkey ceremonies, TOTP setups in progress

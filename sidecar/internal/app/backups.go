@@ -20,8 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"mtxui/internal/audit"
 	"mtxui/internal/auth"
 	"mtxui/internal/auth/clientip"
@@ -483,7 +481,7 @@ func (s *Server) backupSchedule(w http.ResponseWriter, r *http.Request) {
 
 // backupParam reads {name}: a backup's name as the listing shows it, never a path.
 func backupParam(w http.ResponseWriter, r *http.Request) (string, bool) {
-	name := chi.URLParam(r, "name")
+	name := param(r, "name")
 	if !backupName.MatchString(name) {
 		writeError(w, http.StatusNotFound, "not_found", "No such backup.")
 		return "", false

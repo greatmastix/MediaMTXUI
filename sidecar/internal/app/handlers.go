@@ -8,9 +8,12 @@ import (
 	"math"
 	"mime"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	"mtxui/internal/audit"
 	"mtxui/internal/auth"
@@ -30,6 +33,19 @@ type Health struct {
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, Health{Status: "ok", Version: buildinfo.Version, MediaMTXVersion: buildinfo.MediaMTXVersion})
+}
+
+// param is a route parameter, unescaped. chi matches on the escaped path when the request's has escapes Go would not
+// have chosen (encodeURIComponent's %2B for "+", %5E for "^" next to it), and then hands out its parameters still
+// escaped, so "~^cams/(.+)$" would arrive as "~%5Ecams/(.%2B)%24".
+func param(r *http.Request, key string) string {
+	p := chi.URLParam(r, key)
+	if r.URL.RawPath != "" {
+		if u, err := url.PathUnescape(p); err == nil {
+			return u
+		}
+	}
+	return p
 }
 
 // decodeJSON reads a small JSON body. It insists on the JSON content type, which a cross-site HTML form cannot send.

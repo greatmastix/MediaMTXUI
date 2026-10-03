@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"mtxui/internal/audit"
 	"mtxui/internal/auth"
@@ -125,5 +127,38 @@ func TestCredentials(t *testing.T) {
 	}
 	if code, _, _ := run(Credential, c, "", "frobnicate"); code != exitUsage {
 		t.Errorf("unknown subcommand: %d", code)
+	}
+}
+
+func TestResetPassword(t *testing.T) {
+	c, st := newCore(t)
+	ctx := context.Background()
+	var gotBy string
+	c.JoinCode = func(_ context.Context, _ *store.Store, _ store.User, by string) (string, time.Time, error) {
+		gotBy = by
+		return "ABCD-EFGH-JKLM-NPQR", time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC), nil
+	}
+	if code, _, _ := run(ResetPassword, c, ""); code != exitUsage {
+		t.Errorf("no username: %d", code)
+	}
+	if code, _, errs := run(ResetPassword, c, "", "--username", "nobody"); code != exitFailed || !strings.Contains(errs, "no account") {
+		t.Errorf("unknown account: %d %q", code, errs)
+	}
+	u, err := st.CreateUser(ctx, "admin", "$argon2id$x", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := run(ResetPassword, c, "", "--username", "admin")
+	if code != exitOK || !strings.Contains(out, "ABCD-EFGH-JKLM-NPQR") || !strings.Contains(out, "2026-10-06 12:00 UTC") || gotBy != "cli" {
+		t.Fatalf("reset: %d %q (by %q)", code, out, gotBy)
+	}
+	events, _ := st.ListAudit(ctx, 1)
+	if len(events) != 1 || events[0].Actor != "cli" || events[0].Action != "user.join-code" || events[0].Target != "admin" ||
+		strings.Contains(fmt.Sprint(events[0].Details), "ABCD") {
+		t.Errorf("audit %+v", events)
+	}
+	_ = st.SetUserDisabled(ctx, u.ID, true)
+	if code, _, errs := run(ResetPassword, c, "", "--username", "admin"); code != exitFailed || !strings.Contains(errs, "disabled") {
+		t.Errorf("disabled account: %d %q", code, errs)
 	}
 }

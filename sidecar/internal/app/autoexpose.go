@@ -209,8 +209,7 @@ func (s *Server) RunAutoExpose(ctx context.Context) {
 	t := time.NewTicker(autoEvery)
 	defer t.Stop()
 	for {
-		s.endExpiredGuests(ctx, s.auto.now())
-		s.autoOnce(ctx)
+		s.autoOnce(ctx) // expired guest keys' sessions end in RunAccess, with exposure control or without
 		select {
 		case <-ctx.Done():
 			return

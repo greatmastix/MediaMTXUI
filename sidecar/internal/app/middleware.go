@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"mtxui/internal/auth"
 	"mtxui/internal/auth/clientip"
 	"mtxui/internal/probe"
@@ -78,9 +80,20 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 		case rec.status >= 400 || !auth.SafeMethod(r.Method):
 			level = slog.LevelInfo
 		}
-		s.d.Log.Log(r.Context(), level, "request", "method", r.Method, "path", r.URL.Path, "status", rec.status,
+		s.d.Log.Log(r.Context(), level, "request", "method", r.Method, "path", loggedPath(r), "status", rec.status,
 			"ms", time.Since(start).Milliseconds(), "ip", clientip.From(r.Context()).IP.String())
 	})
+}
+
+// loggedPath is the request's path for the log, with a WebRTC session's id left out: its URL is all a request needs
+// to change or end that session (SECURITY.md), and admins read this log in the UI.
+func loggedPath(r *http.Request) string {
+	if rc := chi.RouteContext(r.Context()); rc != nil {
+		if p := rc.RoutePattern(); strings.HasSuffix(p, "-session/{id}") {
+			return p
+		}
+	}
+	return r.URL.Path
 }
 
 type statusWriter struct {

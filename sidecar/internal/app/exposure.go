@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"mtxui/internal/audit"
 	"mtxui/internal/auth"
 	"mtxui/internal/auth/clientip"
@@ -52,7 +50,7 @@ type exposureOpen struct {
 }
 
 func (s *Server) exposureOpen(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := param(r, "id")
 	var req exposureOpen
 	if !decodeJSON(w, r, &req) {
 		return
@@ -90,7 +88,7 @@ func (s *Server) exposureOpen(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) exposureClose(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := param(r, "id")
 	s.followHostCloseAll(r.Context())
 	d, err := s.d.Exposure.Set(id, nil)
 	if !s.exposureWritten(w, err) {

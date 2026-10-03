@@ -2,7 +2,7 @@
 
 # Sidecar configuration
 
-The sidecar reads these environment variables. `compose.yaml` sets the ones an install usually needs from `.env` (see `.env.example`); add any other to the `sidecar` service's `environment:`. Invalid values stop it at startup with a message naming every problem. Secrets are never configured here: the sidecar generates them into `state/` on first start.
+The sidecar reads these environment variables. `compose.yaml` sets the ones an install usually needs from `.env` (see `.env.example`); add any other to the `sidecar` service's `environment:` in a `compose.override.yaml` (README: Configuration), since an upgrade replaces `compose.yaml`. Invalid values stop it at startup with a message naming every problem. Secrets are never configured here: the sidecar generates them into `state/` on first start.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -22,13 +22,13 @@ The sidecar reads these environment variables. `compose.yaml` sets the ones an i
 | `MTXUI_MEDIAMTX_HOST` | `mediamtx` | MediaMTX's hostname on the stack network. |
 | `MTXUI_DATA_DIR` | `/data` | Data root: `config/` (mediamtx.yml), `state/` (database and secrets), `logs/`, `recordings/`, `hooks/`, `backups/`. |
 | `MTXUI_HOLDING_DIR` | `/holding` | Holding clips, played while nobody streams to a stream. MediaMTX must see the directory at the same path (read-only), since `mediamtx.yml` names the files by it. |
-| `MTXUI_RECORDINGS_MAX_GB` | `0` | Storage budget for recordings in GB (decimals allowed); the oldest segments are deleted, through MediaMTX's API, to stay under it. 0 means no budget (free space still applies). |
+| `MTXUI_RECORDINGS_MAX_GB` | `0` | Storage budget for recordings in GB (decimals allowed); the oldest segments are deleted, through MediaMTX's API, to stay under it. 0 means no budget (free space still applies). Files MediaMTX does not list count toward it but are never deleted; a banner says so when they alone exceed it. |
 | `MTXUI_RECORDINGS_MIN_FREE_GB` | `20` | Free space to keep on the recordings filesystem: below it, the oldest segments are deleted. |
 | `MTXUI_RECORDINGS_CRITICAL_FREE_GB` | `5` | Free space below which recording is switched off for every path (with a banner and an audit entry) until an admin switches it back on. Less than MTXUI_RECORDINGS_MIN_FREE_GB. |
 | `MTXUI_RECORDINGS_CHECK_EVERY` | `1m` | How often recordings' disk use is measured and the budget enforced (1s to 1h). |
 | `MTXUI_EXPORT_MAX_DURATION` | `2h` | Longest range one recording export may cover (1m to 24h). |
 | `MTXUI_EXPORT_MAX_GB` | `8` | Largest recording export in GB: the download stops there. |
-| `MTXUI_EXPORT_CONCURRENCY` | `2` | Recording exports running at once (1 to 16); more are refused until one ends. |
+| `MTXUI_EXPORT_CONCURRENCY` | `2` | Recording exports running at once (1 to 16); more are refused until one ends. An export holds its slot at most twice its range plus a minute, however slowly the client reads. |
 | `MTXUI_PASSKEYS` | `auto` | Passkeys (WebAuthn sign-in): `auto` offers them when MTXUI_PUBLIC_URL is HTTPS or localhost (browsers allow them only there; the relying party is its host), `on` (needs a domain name or localhost there, not an IP address) or `off`. |
 | `MTXUI_MEDIAMTX_BIN` | `/usr/libexec/mtxui/mediamtx` | The MediaMTX binary the image carries, used only to run `--validate-conf` on every config before it is written. |
 | `MTXUI_MEDIAMTX_LOG_MAX_MB` | `20` | MediaMTX's log file is rotated (copy-truncate, gzipped) when it grows past this many MB (1 to 1024). |

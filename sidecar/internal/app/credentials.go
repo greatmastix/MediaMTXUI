@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"mtxui/internal/audit"
 	"mtxui/internal/credentials"
 	"mtxui/internal/mtxauth"
@@ -123,7 +121,7 @@ func (s *Server) credentialCreate(w http.ResponseWriter, r *http.Request) {
 // credentialRevoke revokes a credential and closes what it opened: the sessions the authentication endpoint saw it
 // authenticate, and any session MediaMTX lists under its name (opened before the sidecar started).
 func (s *Server) credentialRevoke(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
+	name := param(r, "name")
 	c, err := s.d.Store.CredentialByName(r.Context(), name)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "No such credential.")

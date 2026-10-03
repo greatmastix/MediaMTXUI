@@ -136,10 +136,14 @@ func TestRecordingsAPI(t *testing.T) {
 	h.srv.recordingsOnce(context.Background())
 
 	var list struct {
-		Disk  RecordingsDisk  `json:"disk"`
-		Paths []RecordingPath `json:"paths"`
+		Disk             RecordingsDisk  `json:"disk"`
+		Paths            []RecordingPath `json:"paths"`
+		ExportMaxSeconds float64         `json:"exportMaxSeconds"`
 	}
 	h.json(h.do("GET", "/api/v1/recordings", nil), &list)
+	if list.ExportMaxSeconds != h.srv.d.Settings.ExportMaxDuration.Seconds() || list.ExportMaxSeconds == 0 {
+		t.Errorf("exportMaxSeconds %v", list.ExportMaxSeconds)
+	}
 	if len(list.Paths) != 2 || list.Paths[0].Name != "live/cam" || list.Paths[0].Bytes != 3000 || list.Paths[0].Segments != 2 ||
 		!list.Paths[0].Last.Equal(base.Add(time.Minute)) || list.Disk.Recordings != 3500 || list.Disk.Free <= 0 || list.Disk.Guard != nil {
 		t.Fatalf("list %+v", list)

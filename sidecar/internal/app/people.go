@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base32"
@@ -146,13 +147,23 @@ func (s *Server) userInvite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, inv)
 }
 
-func (s *Server) issueJoinCode(r *http.Request, u store.User) (Invitation, error) {
+// IssueJoinCode makes a new join code for u (an unused older one stops working) and returns it as people type it,
+// with its expiry. For someone who has joined, it is a password reset. by names who made it, for the record.
+func IssueJoinCode(ctx context.Context, st *store.Store, u store.User, by string) (string, time.Time, error) {
 	code, hash, err := newJoinCode()
 	if err != nil {
-		return Invitation{}, err
+		return "", time.Time{}, err
 	}
-	expires := s.d.Store.Now().Add(joinCodeTTL).Truncate(time.Second)
-	if err := s.d.Store.CreateJoinCode(r.Context(), u.ID, hash, expires, s.author(r)); err != nil {
+	expires := st.Now().Add(joinCodeTTL).Truncate(time.Second)
+	if err := st.CreateJoinCode(ctx, u.ID, hash, expires, by); err != nil {
+		return "", time.Time{}, err
+	}
+	return code, expires, nil
+}
+
+func (s *Server) issueJoinCode(r *http.Request, u store.User) (Invitation, error) {
+	code, expires, err := IssueJoinCode(r.Context(), s.d.Store, u, s.author(r))
+	if err != nil {
 		return Invitation{}, err
 	}
 	return Invitation{

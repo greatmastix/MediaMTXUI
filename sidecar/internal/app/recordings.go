@@ -204,7 +204,10 @@ func (s *Server) recordingsList(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, p)
 	}
 	sort.Slice(paths, func(i, j int) bool { return paths[i].Name < paths[j].Name })
-	writeJSON(w, http.StatusOK, map[string]any{"disk": s.recordingsDisk(ctx), "paths": paths})
+	// exportMaxSeconds lets the page offer Play and Download only for ranges an export takes.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"disk": s.recordingsDisk(ctx), "paths": paths, "exportMaxSeconds": s.d.Settings.ExportMaxDuration.Seconds(),
+	})
 }
 
 // recordingPath reads and checks the path query parameter: a MediaMTX path name, never a filesystem path.

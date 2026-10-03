@@ -77,7 +77,7 @@ func run(args []string) int {
 	case "version":
 		fmt.Printf("mtxui %s (built for MediaMTX %s)\n", buildinfo.Version, buildinfo.MediaMTXVersion)
 		return 0
-	case "setup", "credential":
+	case "setup", "credential", "reset-password":
 		ctx := context.Background()
 		cfg, err := settings.Load(os.Getenv)
 		if err != nil {
@@ -90,14 +90,17 @@ func run(args []string) int {
 			return 1
 		}
 		defer c.store.Close()
-		core := cli.Core{Setup: c.setup, Creds: c.creds, Audit: c.audit}
+		core := cli.Core{Setup: c.setup, Creds: c.creds, Audit: c.audit, JoinCode: app.IssueJoinCode}
 		streams := cli.IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}
-		if cmd == "setup" {
+		switch cmd {
+		case "setup":
 			return cli.Setup(ctx, core, args, streams)
+		case "reset-password":
+			return cli.ResetPassword(ctx, core, args, streams)
 		}
 		return cli.Credential(ctx, core, args, streams)
 	default:
-		fmt.Fprintln(os.Stderr, "usage: mtxui [serve|healthcheck|version|setup-token|setup|credential]")
+		fmt.Fprintln(os.Stderr, "usage: mtxui [serve|healthcheck|version|setup-token|setup|credential|reset-password]")
 		return 2
 	}
 }
@@ -112,11 +115,20 @@ type core struct {
 	setup     *setup.Service
 	hasher    *auth.Hasher
 	audit     *audit.Recorder
+	// subnetSure: cfg.StackSubnet was set, or detected on the only network there is (detectSubnet)
+	subnetSure bool
 }
 
 func open(ctx context.Context, cfg *settings.Settings, log *slog.Logger) (*core, error) {
-	if !cfg.StackSubnet.IsValid() {
-		cfg.StackSubnet = detectSubnet()
+	subnetSure := cfg.StackSubnet.IsValid()
+	if !subnetSure {
+		var n int
+		cfg.StackSubnet, n = detectSubnet()
+		subnetSure = n == 1
+		if n > 1 {
+			log.Warn("the sidecar is on more than one network; set MTXUI_STACK_SUBNET to the stack network's subnet "+
+				"(taking the first, and leaving MediaMTX's trusted proxies as they are)", "subnet", cfg.StackSubnet)
+		}
 	}
 	for _, dir := range []string{cfg.ConfigDir(), cfg.StateDir()} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -134,7 +146,7 @@ func open(ctx context.Context, cfg *settings.Settings, log *slog.Logger) (*core,
 	}
 	c := &core{
 		cfg: cfg, store: st, creds: credentials.New(st, key), validator: mtxconf.Validator{Bin: cfg.MediaMTXBin},
-		hasher: auth.NewHasher(auth.DefaultParams, 2), audit: audit.NewRecorder(st, log),
+		hasher: auth.NewHasher(auth.DefaultParams, 2), audit: audit.NewRecorder(st, log), subnetSure: subnetSure,
 	}
 	c.writer = &mtxconf.Writer{
 		Path: cfg.ConfigFile(), LockPath: filepath.Join(cfg.StateDir(), "config.lock"),
@@ -225,10 +237,13 @@ func start(ctx context.Context, cfg *settings.Settings, log *slog.Logger, logHub
 		log.Info(outcome.Message)
 	}
 
-	if changed, err := c.writer.SyncTrustedProxies(ctx, cfg.StackSubnet); err != nil {
-		log.Warn("setting MediaMTX's trusted proxies to the stack subnet", "subnet", cfg.StackSubnet, "err", err)
-	} else if changed {
-		log.Info("MediaMTX's trusted proxies now follow the stack subnet", "subnet", cfg.StackSubnet)
+	// Only for a subnet that is surely the stack's: detectSubnet may have taken another network's, and open() said so.
+	if c.subnetSure {
+		if changed, err := c.writer.SyncTrustedProxies(ctx, cfg.StackSubnet); err != nil {
+			log.Warn("setting MediaMTX's trusted proxies to the stack subnet", "subnet", cfg.StackSubnet, "err", err)
+		} else if changed {
+			log.Info("MediaMTX's trusted proxies now follow the stack subnet", "subnet", cfg.StackSubnet)
+		}
 	}
 
 	principal, err := mtxauth.NewPrincipal()
@@ -376,8 +391,12 @@ func sweep(ctx context.Context, sessions *auth.Sessions, log *slog.Logger) {
 	}
 }
 
-// detectSubnet returns the prefix of the first non-loopback IPv4 interface: in a compose stack, the stack network.
-func detectSubnet() netip.Prefix {
+// detectSubnet returns the prefix of the first non-loopback IPv4 interface, and how many there are. In a compose stack
+// with one network, that is the stack network; with more (a reverse proxy's network too), it may be another, and
+// MediaMTX starts only after the sidecar, so its address cannot tell.
+func detectSubnet() (netip.Prefix, int) {
+	var first netip.Prefix
+	n := 0
 	ifaces, _ := net.Interfaces()
 	for _, ifc := range ifaces {
 		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
@@ -385,16 +404,18 @@ func detectSubnet() netip.Prefix {
 		}
 		addrs, _ := ifc.Addrs()
 		for _, a := range addrs {
-			n, ok := a.(*net.IPNet)
-			if !ok || n.IP.To4() == nil {
+			ipn, ok := a.(*net.IPNet)
+			if !ok || ipn.IP.To4() == nil {
 				continue
 			}
-			addr, _ := netip.AddrFromSlice(n.IP.To4())
-			ones, _ := n.Mask.Size()
-			return netip.PrefixFrom(addr, ones).Masked()
+			if n++; n == 1 {
+				addr, _ := netip.AddrFromSlice(ipn.IP.To4())
+				ones, _ := ipn.Mask.Size()
+				first = netip.PrefixFrom(addr, ones).Masked()
+			}
 		}
 	}
-	return netip.Prefix{}
+	return first, n
 }
 
 func healthcheck() int {

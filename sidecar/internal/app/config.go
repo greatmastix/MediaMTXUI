@@ -175,7 +175,7 @@ type pathConfig struct {
 
 // pathParam reads a path name from the route: a MediaMTX path name, a regular expression (~...) or all_others.
 func pathParam(r *http.Request) (string, error) {
-	name := chi.URLParam(r, "*")
+	name := param(r, "*")
 	switch {
 	case name == "all_others":
 		return name, nil

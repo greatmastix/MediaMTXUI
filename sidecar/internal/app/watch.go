@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"mtxui/internal/auth"
 	"mtxui/internal/auth/clientip"
 	"mtxui/internal/liveproxy"
@@ -26,7 +24,7 @@ func (s *Server) viewer(r *http.Request) liveproxy.Viewer {
 }
 
 func (s *Server) watchHLS(w http.ResponseWriter, r *http.Request) {
-	path, file, err := liveproxy.SplitHLS(chi.URLParam(r, "*"))
+	path, file, err := liveproxy.SplitHLS(param(r, "*"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid", "Invalid path or file.")
 		return
@@ -39,7 +37,7 @@ func (s *Server) watchHLS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) watchWHEP(w http.ResponseWriter, r *http.Request) {
-	path := chi.URLParam(r, "*")
+	path := param(r, "*")
 	if err := pathname.Valid(path); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid", "Invalid path name.")
 		return
@@ -52,7 +50,7 @@ func (s *Server) watchWHEP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) watchWHEPSession(w http.ResponseWriter, r *http.Request) {
-	s.d.Watch.WHEPSession(w, r, s.viewer(r), chi.URLParam(r, "id"))
+	s.d.Watch.WHEPSession(w, r, s.viewer(r), param(r, "id"))
 }
 
 // mayWatchAs reports whether user u may watch path: viewers and up watch anything, streamers their own.
@@ -164,7 +162,7 @@ func (s *Server) viewerOf(ctx context.Context, key string) (store.User, bool, er
 
 func (s *Server) externalOffer(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		path := chi.URLParam(r, "*")
+		path := param(r, "*")
 		if err := pathname.Valid(path); err != nil {
 			http.Error(w, "invalid path name", http.StatusBadRequest)
 			return
@@ -174,7 +172,7 @@ func (s *Server) externalOffer(kind string) http.HandlerFunc {
 }
 
 func (s *Server) externalSession(w http.ResponseWriter, r *http.Request) {
-	s.d.Watch.ExternalSession(w, r, clientip.From(r.Context()).IP, chi.URLParam(r, "id"))
+	s.d.Watch.ExternalSession(w, r, clientip.From(r.Context()).IP, param(r, "id"))
 }
 
 // externalRTC reports whether a request is for the external WHIP/WHEP endpoints, which the CSRF check leaves alone:
@@ -229,7 +227,7 @@ func (s *Server) layoutsList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) layoutSave(w http.ResponseWriter, r *http.Request) {
 	cur, _ := current(r.Context())
-	name := chi.URLParam(r, "name")
+	name := param(r, "name")
 	if !layoutName.MatchString(name) {
 		writeError(w, http.StatusBadRequest, "invalid", "Layout names use letters, digits, spaces and _ . - (up to 64).")
 		return
@@ -291,7 +289,7 @@ func (s *Server) saveLayout(w http.ResponseWriter, r *http.Request, uid int64, n
 
 func (s *Server) layoutDelete(w http.ResponseWriter, r *http.Request) {
 	cur, _ := current(r.Context())
-	switch err := s.d.Store.DeleteLayout(r.Context(), cur.user.ID, chi.URLParam(r, "name")); {
+	switch err := s.d.Store.DeleteLayout(r.Context(), cur.user.ID, param(r, "name")); {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "No such layout.")
 	case err != nil:
