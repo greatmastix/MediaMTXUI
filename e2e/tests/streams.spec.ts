@@ -73,7 +73,7 @@ test('stream settings save, and deleting a stream leaves its page', async ({ pag
   await expect(page.getByRole('heading', { name: 'e2e/throwaway' })).toBeVisible()
   await expect(page.getByTestId('watch-link')).toBeVisible() // public by default
 
-  // The form sends everything, the viewer limit (0, none) included.
+  // The form sends only what changed.
   await page.getByLabel('Title').fill('Throwaway')
   await page.getByRole('checkbox', { name: /Public/ }).uncheck()
   await page.getByRole('button', { name: 'Save' }).click()

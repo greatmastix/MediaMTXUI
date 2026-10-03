@@ -39,8 +39,16 @@ viewer changing settings). An admin can change everything by design; the host an
   *Evidence:* `TestToken` (internal/setup), `TestSetupIsAtomicAndOnce`, `TestStreamsAndJoinCodes`, the e2e setup
   project.
 - [x] **There is always an admin**: the last enabled admin cannot be demoted, disabled or deleted, even by two
-  requests at once.
-  *Evidence:* `TestChangeUserKeepsAnAdmin` (internal/store).
+  requests at once. An admin who lost the password with nobody to reset it gets a join code from
+  `docker compose exec sidecar /mtxui reset-password --username NAME` (whoever can run that is root on the host);
+  it is audited.
+  *Evidence:* `TestChangeUserKeepsAnAdmin` (internal/store), `TestResetPassword` (internal/cli),
+  `TestIssueJoinCodeResetsAPassword`.
+- [x] **Taking access away takes effect now.** Disabling, deleting, demoting or signing out someone (a password
+  change and "sign out everywhere" included) closes their open live views within seconds; making a stream private or
+  deleting it disconnects its anonymous viewers within about 2 s; what a guest key opened is disconnected when the
+  key expires.
+  *Evidence:* the `*_sessions_test.go` tests in internal/app, internal/mtxauth and internal/liveproxy.
 
 ### Who may do what
 
@@ -142,11 +150,16 @@ viewer changing settings). An admin can change everything by design; the host an
   *Evidence:* `TestAuditIsAppendOnly` (internal/store), `TestAuditRecordsRealClients`, `TestAuditAnonymous`; the
   tests of mutating endpoints check their audit entries.
 - [x] **Backups** are encrypted (age, X25519, the key wrapped with scrypt under your passphrase); a damaged or
-  hostile backup file is refused before anything is restored.
+  hostile backup file is refused before anything is restored, and its `mediamtx.yml` passes the same checks as a
+  config edit. A restore keeps the replaced server's audit log after the backup's; uploaded backup files are kept for
+  a day (the newest three).
   *Evidence:* `TestBackupAndRestore`, `TestMaliciousPayloads`, `FuzzOpen`, `TestWorkFactorCap` (internal/backup).
 - [x] **Exposure control** (optional) goes through a root helper that reads request files and applies only what a
-  root-owned policy allows.
-  *Evidence:* `TestPolicyViolationsAreRefused`, `TestRequestFileIsReadSafely`, `FuzzApply` (internal/portgate).
+  root-owned policy allows, never touches ufw rules of your own, and keeps a close-all from the host closed until the
+  UI takes it in. Its automatic rules (on by default) open the stream ports to anyone while a stream is live, and are
+  described in [docs/exposure-control.md](exposure-control.md).
+  *Evidence:* `TestPolicyViolationsAreRefused`, `TestRequestFileIsReadSafely`, `TestOperatorRulesAreLeftAlone`,
+  `TestHostCloseAllHolds`, `FuzzApply` (internal/portgate).
 
 ### Containers, dependencies, image
 
@@ -192,9 +205,13 @@ Decisions, and limits we accept, so you can judge them for your setup.
 - **Stream protocols carry their own risks.** RTMP, RTSP and SRT without encryption send stream keys in clear; use
   RTMPS, RTSPS or SRT with a passphrase where that matters. MediaMTX's HLS session IDs appear in URLs; they are bound
   to the viewer's address.
+- **Disconnecting after a restart.** Revoking or regenerating a key finds the sessions it opened, except sessions
+  that started with a bearer token before the sidecar last restarted (MediaMTX lists them without a user). The
+  stream page's Disconnect ends a publisher regardless.
 - **The known limits in [SECURITY.md](../SECURITY.md#known-limits)**: "confirm it's you" accepts the password even
   with a second factor set up; MediaMTX's log shows a forward's URL without its credentials and fragment, but with
-  a key written into its path; the WHIP and WHEP endpoints send no CORS headers.
+  a key written into its path; MediaMTX's plain log format lets a client add lines to it; the WHIP and WHEP endpoints
+  send no CORS headers.
 - **A build tool's advisory.** `braces` (GHSA-vfj7-8cjw-p6xm, high, no fixed version) is used by the shadcn
   command-line tool through `fast-glob`, at build time, on the project's own patterns; it never reaches the image or
   the browser.

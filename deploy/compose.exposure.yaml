@@ -1,9 +1,13 @@
-# Exposure control (docs/exposure-control.md): the stream ports stay closed to the internet until an admin opens
-# them on the Exposure page, or an encoder's address is let in while its stream page is open. It needs the host
-# helper mtx-portgate and a firewall in front of Docker's published ports (a cloud firewall, for one). Use it on
-# top of compose.yaml (and deploy/compose.behind-proxy.yaml, if you use that):
+# Exposure control (docs/exposure-control.md): the stream ports stay closed to the internet except when an admin
+# opens them on the Exposure page, or an automatic rule does (all on by default): an encoder's address while its
+# stream page is open, and anyone while a stream is live or has a holding screen, or a guest publish key is valid.
+# It needs the host helper mtx-portgate and a firewall in front of Docker's published ports (a cloud firewall, for
+# one). Use it on top of compose.yaml: put it next to it, and add this line to .env (with compose.behind-proxy.yaml
+# in the list too, if you use that), so that every docker compose command uses both files:
 #
-#   docker compose -f compose.yaml -f deploy/compose.exposure.yaml up -d
+#   COMPOSE_FILE=compose.yaml:compose.exposure.yaml
+#
+# (In a checkout of the repository: docker compose -f compose.yaml -f deploy/compose.exposure.yaml up -d.)
 services:
   sidecar:
     environment:

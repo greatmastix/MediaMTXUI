@@ -171,8 +171,10 @@ restore will change, and restore. The UI restarts with the backup in a few secon
 [docs/security.md](docs/security.md) has the whole list, with the test or check behind each item, and the
 decisions to know about. Found a vulnerability? See [SECURITY.md](SECURITY.md).
 
-**Exposure control** (advanced): stream ports that stay closed until an admin opens them for an address or a while.
-It needs a firewall in front of Docker that ufw rules control; see [docs/exposure-control.md](docs/exposure-control.md).
+**Exposure control** (advanced): stream ports that stay closed except when they are needed. Admins open them for an
+address or a while, and automatic rules (all on by default) let an encoder's address in while its stream page is open,
+and open the ports to anyone while a stream is live or has a holding screen, or a guest publish key is valid. It needs
+a firewall in front of Docker that ufw rules control; see [docs/exposure-control.md](docs/exposure-control.md).
 
 ## Troubleshooting
 
@@ -185,9 +187,9 @@ It needs a firewall in front of Docker that ufw rules control; see [docs/exposur
   page says so.
 - **Lost a password**: another admin presses **Reset password** on the **People** page and passes on the join code
   it shows, which lets you choose a new password once. Lost the authenticator app: sign in with a recovery code, or
-  have another admin press **Reset second factor** there. The only admin cannot get back in after losing the
-  password, so keep a second admin account. Restoring a backup does not help (it brings back the same accounts and
-  passwords), and starting over with `docker compose down -v` deletes all data, the backups volume included.
+  have another admin press **Reset second factor** there. With no other admin, make the code on the server:
+  `docker compose exec sidecar /mtxui reset-password --username NAME`, then open `/join` and enter it. Restoring a
+  backup does not help (it brings back the same accounts and passwords).
 
 ## Development
 

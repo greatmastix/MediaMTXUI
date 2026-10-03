@@ -56,5 +56,9 @@ These are known and need no report.
   with the rest of the URL. A key in the path of a custom RTMP or RTSP address, or an SRT address's `streamid` and
   `passphrase` (SRT carries them in the URL), therefore end up in MediaMTX's log, which admins can read and download
   in the UI. The forward form puts RTMP keys in the fragment and WHIP keys in a header for that reason.
+- MediaMTX writes some text a client chooses (a refused SRT stream id, for one) into its log as it is. In its plain
+  log format a line break in that text starts what looks like a new line, so the log viewer can show a line MediaMTX
+  did not write; characters that do not print are shown escaped, and the sidecar never acts on such text. With
+  `logStructured: yes` (Configuration → YAML) MediaMTX quotes every message, and the viewer reads that format too.
 - Because the WHIP and WHEP endpoints send no CORS headers, a web player on another site cannot use them; watch
   links and the UI's own player work.

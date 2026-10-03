@@ -447,7 +447,7 @@ const ruleText: { key: keyof AutoRules; label: string; hint: string }[] = [
   {
     key: 'publish',
     label: 'Let encoders in while a stream is set up or live',
-    hint: "While a stream page is open, its publishing ports accept that browser's address; while a stream is live, the port it uses stays open to its encoder.",
+    hint: "While a stream page is open, its publishing ports accept that browser's address (three addresses per stream at most); while a stream is live, the port it uses stays open to its encoder. A valid guest publish key opens the publishing ports to anyone until it expires.",
   },
   {
     key: 'remember',
@@ -457,7 +457,7 @@ const ruleText: { key: keyof AutoRules; label: string; hint: string }[] = [
   {
     key: 'viewers',
     label: 'Let players and viewers in while something is live',
-    hint: 'RTSP, RTMP, SRT and WebRTC media are open to anyone while a path is live, so players such as VRChat or VLC and outside browsers reach them. Playback keys still decide who may watch.',
+    hint: 'RTSP, RTMP, SRT and WebRTC media are open to anyone while a path is live or any stream has a holding screen, so players such as VRChat or VLC and outside browsers reach them. Playback keys still decide who may watch.',
   },
 ]
 

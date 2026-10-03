@@ -43,7 +43,7 @@ COPY --from=sidecar /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifi
 COPY --from=sidecar /out/mtxui /mtxui
 COPY --from=mediamtx /mediamtx /usr/libexec/mtxui/mediamtx
 # The host helper for exposure control, carried here so the host can take it from the image it runs
-# (deploy/host/portgate/install.sh). The sidecar never runs it.
+# (deploy/portgate/install.sh). The sidecar never runs it.
 COPY --from=sidecar /out/mtx-portgate /usr/libexec/mtxui/mtx-portgate
 COPY --from=sidecar --chown=10002:10002 /out/data /data
 COPY --from=sidecar --chown=10002:10002 /out/holding /holding

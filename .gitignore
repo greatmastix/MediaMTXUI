@@ -1,5 +1,5 @@
 # toolchain caches (./dev) and dev/e2e stack data
-/.cache/
+/.cache
 /deploy/.dev/
 # a real deployment's settings and data
 /deploy/.env

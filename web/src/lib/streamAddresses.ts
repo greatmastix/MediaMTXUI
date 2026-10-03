@@ -134,7 +134,7 @@ export function playbackTargets(stream: Stream, key: StreamKey, origin: string):
   if (webrtc) {
     out.push({
       protocol: 'WHEP',
-      use: 'Web players and OBS (WHEP source): WebRTC, under a second behind.',
+      use: 'OBS (WHEP source) and other WHEP players: WebRTC, under a second behind. Web pages elsewhere cannot use it; share the watch link.',
       fields: [
         { label: 'Server', value: `${origin}/whep/${stream.name.split('/').map(enc).join('/')}` },
         { label: 'Bearer token', value: `${key.name}:${key.secret}`, secret: true },
@@ -179,7 +179,7 @@ export function publicTargets(stream: Stream, origin: string): PublishTarget[] {
   if (webrtc) {
     out.push({
       protocol: 'WHEP',
-      use: 'Web players and OBS (WHEP source): WebRTC, under a second behind.',
+      use: 'OBS (WHEP source) and other WHEP players: WebRTC, under a second behind. Web pages elsewhere cannot use it; share the watch link.',
       fields: [
         { label: 'Server', value: `${origin}/whep/${stream.name.split('/').map(enc).join('/')}` },
       ],
