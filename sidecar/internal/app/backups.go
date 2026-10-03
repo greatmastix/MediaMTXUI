@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -36,16 +37,19 @@ import (
 // it opens the database.
 
 const (
-	metaBackupRecipient = "backup_recipient"
-	metaBackupKey       = "backup_key"
-	metaBackupSchedule  = "backup_schedule"
-	metaBackupLast      = "backup_last"
+	metaBackupRecipient     = "backup_recipient"
+	metaBackupKey           = "backup_key"
+	metaBackupSchedule      = "backup_schedule"
+	metaBackupLast          = "backup_last"           // the newest attempt of any kind, for the page
+	metaBackupLastScheduled = "backup_last_scheduled" // the day (UTC) of the newest scheduled attempt
 
 	stagingTTL        = 15 * time.Minute // a preview stays ready to restore this long
 	uploadTTL         = 24 * time.Hour   // an uploaded backup is deleted after this
+	keepUploads       = 3                // uploaded backups, kept (the newest)
 	keepBeforeRestore = 3                // backups made before restores, kept
 	restoreReady      = "restore-ready"  // under state/: the staged restore the next start applies
 	readyFile         = "ready.json"
+	addedFile         = "added.json" // in a checked backup's directory: the clips its check adds to the holding directory
 )
 
 var backupName = regexp.MustCompile(`^(?:mtxui-\d{8}-\d{6}-(scheduled|manual|before-restore)|upload-[0-9a-f]{16})\.mtxbackup$`)
@@ -78,6 +82,8 @@ type BackupInfo struct {
 	Created time.Time `json:"created"`
 	Host    string    `json:"host"`
 	Version string    `json:"version"`
+
+	modTime time.Time // when the file was written here: an upload's header says what its uploader wants
 }
 
 // BackupsView is the backups page.
@@ -112,16 +118,18 @@ type backupState struct {
 
 type stagedRestore struct {
 	preview RestorePreview
-	dir     string        // under state/
-	clips   []string      // the backup's clip names, as dir/clip-N
-	added   []string      // clips the check put into the holding directory (new names only), removed if abandoned
+	dir     string        // under state/; dir/added.json lists the clips the check added, removed if abandoned
 	ex      backupExtract // what the start applies
 }
 
-// backupExtract is ready.json: what a staged restore holds.
+// backupExtract is ready.json: what a staged restore holds, who asked for it, and how far the start got with it.
 type backupExtract struct {
 	Name  string   `json:"name"`
 	Clips []string `json:"clips"`
+	By    string   `json:"by,omitempty"`
+	IP    string   `json:"ip,omitempty"`
+	Phase string   `json:"phase,omitempty"` // see restore.go
+	Moved []string `json:"moved,omitempty"` // the files of state/ that went to state/pre-restore/
 }
 
 var errNoBackupKey = errors.New("set a backup passphrase first")
@@ -158,7 +166,7 @@ func (s *Server) listBackups() ([]BackupInfo, error) {
 			info.Kind = "upload"
 		}
 		if fi, err := e.Info(); err == nil {
-			info.Size, info.Created = fi.Size(), fi.ModTime()
+			info.Size, info.Created, info.modTime = fi.Size(), fi.ModTime(), fi.ModTime()
 		}
 		if f, err := root.Open(e.Name()); err == nil {
 			if rd, err := backup.Open(f); err == nil {
@@ -290,7 +298,9 @@ func (s *Server) createBackup(ctx context.Context, kind string) (BackupInfo, err
 }
 
 // pruneBackups deletes scheduled backups beyond the schedule's keep, before-restore ones beyond three, uploads
-// older than a day, and leftovers of interrupted writes. Manual backups stay until someone deletes them.
+// beyond the newest three or older than a day, and leftovers of interrupted writes. Manual backups stay until
+// someone deletes them. Uploads go by when they arrived, never by the date in their header, which their uploader
+// wrote.
 func (s *Server) pruneBackups() {
 	list, err := s.listBackups()
 	if err != nil {
@@ -301,11 +311,18 @@ func (s *Server) pruneBackups() {
 		return
 	}
 	defer root.Close()
-	keep := map[string]int{"scheduled": s.schedule(context.Background()).Keep, "before-restore": keepBeforeRestore}
+	keep := map[string]int{"scheduled": s.schedule(context.Background()).Keep, "before-restore": keepBeforeRestore, "upload": keepUploads}
+	at := func(b BackupInfo) time.Time {
+		if b.Kind == "upload" {
+			return b.modTime
+		}
+		return b.Created
+	}
+	sort.Slice(list, func(i, j int) bool { return at(list[i]).After(at(list[j])) })
 	seen := map[string]int{}
 	for _, b := range list { // newest first
 		seen[b.Kind]++
-		if limit, ok := keep[b.Kind]; (ok && seen[b.Kind] > limit) || (b.Kind == "upload" && time.Since(b.Created) > uploadTTL) {
+		if limit, ok := keep[b.Kind]; (ok && seen[b.Kind] > limit) || (b.Kind == "upload" && time.Since(b.modTime) > uploadTTL) {
 			_ = root.Remove(b.Name)
 		}
 	}
@@ -318,7 +335,8 @@ func (s *Server) pruneBackups() {
 	}
 }
 
-// RunBackups makes the scheduled backup once a day at the schedule's time (UTC), until ctx ends.
+// RunBackups makes the scheduled backup once a day at the schedule's time (UTC), and prunes the backups every minute
+// (uploads expire whether or not backups are made), until ctx ends.
 func (s *Server) RunBackups(ctx context.Context) {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
@@ -329,10 +347,12 @@ func (s *Server) RunBackups(ctx context.Context) {
 		case <-t.C:
 		}
 		s.scheduledBackup(ctx, time.Now().UTC())
+		s.pruneBackups()
 	}
 }
 
-// scheduledBackup makes today's scheduled backup if it is due: enabled, the time has come, and none was made today.
+// scheduledBackup makes today's scheduled backup if it is due: enabled, the time has come, and no scheduled backup
+// was attempted today (manual ones do not count: they would push scheduled ones out of the keep).
 func (s *Server) scheduledBackup(ctx context.Context, now time.Time) {
 	sc := s.schedule(ctx)
 	if !sc.Enabled || now.Format("15:04") < sc.Time {
@@ -341,8 +361,16 @@ func (s *Server) scheduledBackup(ctx context.Context, now time.Time) {
 	if _, ok, _ := s.d.Store.Meta(ctx, metaBackupRecipient); !ok {
 		return
 	}
-	if l := s.lastBackup(ctx); l != nil && l.Kind == "scheduled" && l.At.UTC().Format("2006-01-02") == now.Format("2006-01-02") {
+	today := now.Format("2006-01-02")
+	day, ok, _ := s.d.Store.Meta(ctx, metaBackupLastScheduled)
+	if l := s.lastBackup(ctx); !ok && l != nil && l.Kind == "scheduled" { // recorded before the day had its own key
+		day = l.At.UTC().Format("2006-01-02")
+	}
+	if day == today {
 		return
+	}
+	if err := s.d.Store.SetMeta(ctx, metaBackupLastScheduled, today); err != nil {
+		s.d.Log.Warn("recording the scheduled backup's day", "err", err)
 	}
 	s.bk.mu.Lock()
 	info, err := s.createBackup(ctx, "scheduled")
@@ -407,7 +435,8 @@ func errText(err error) string {
 }
 
 // backupPassphrase sets the passphrase: a new backup key, wrapped with it. Backups made before keep the passphrase
-// they were made with (each carries its own wrapped key).
+// they were made with (each carries its own wrapped key). The key's two halves are stored together, and never while
+// a backup reads them: a backup encrypted to one key that carries another opens with no passphrase at all.
 func (s *Server) backupPassphrase(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Passphrase string `json:"passphrase"`
@@ -421,10 +450,9 @@ func (s *Server) backupPassphrase(w http.ResponseWriter, r *http.Request) {
 	}
 	recipient, wrapped, err := backup.NewKey(body.Passphrase)
 	if err == nil {
-		err = s.d.Store.SetMeta(r.Context(), metaBackupKey, string(wrapped))
-	}
-	if err == nil {
-		err = s.d.Store.SetMeta(r.Context(), metaBackupRecipient, recipient)
+		s.bk.mu.Lock()
+		err = s.d.Store.SetMetas(r.Context(), map[string]string{metaBackupKey: string(wrapped), metaBackupRecipient: recipient})
+		s.bk.mu.Unlock()
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "The passphrase could not be set.")
@@ -565,6 +593,7 @@ func (s *Server) backupUpload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", "The upload could not be stored.")
 		return
 	}
+	s.pruneBackups() // the newest uploads stay
 	audit.Set(r.Context(), "backup.upload", name, map[string]any{"size": n, "created": rd.Header.Created, "host": rd.Header.Host})
 	writeJSON(w, http.StatusCreated, BackupInfo{Name: name, Kind: "upload", Size: n, Created: rd.Header.Created, Host: rd.Header.Host, Version: rd.Header.Version})
 }
@@ -576,19 +605,46 @@ func (s *Server) discardStaged() {
 		return
 	}
 	s.bk.staged = nil
-	_ = os.RemoveAll(st.dir)
-	if root, err := os.OpenRoot(s.d.Settings.HoldingDir); err == nil {
-		for _, c := range st.added {
-			_ = root.Remove(c)
+	s.dropStaging(context.Background(), st.dir)
+}
+
+// dropStaging removes a checked backup's directory and the clips its check added to the holding directory (as
+// dir/added.json lists them, so this works after a restart too), except those in use by now: an upload of the same
+// clip for a stream of the same id lands on the same name.
+func (s *Server) dropStaging(ctx context.Context, dir string) {
+	var added []string
+	if b, err := os.ReadFile(filepath.Join(dir, addedFile)); err == nil {
+		_ = json.Unmarshal(b, &added)
+	}
+	if len(added) > 0 {
+		inUse := s.clipsInUse(ctx)
+		for _, c := range added {
+			if !inUse(c) {
+				s.removeClip(c)
+			}
 		}
-		_ = root.Close()
+	}
+	_ = os.RemoveAll(dir)
+}
+
+// clipsInUse reports whether a stream has a holding clip of that name or mediamtx.yml names it. When either cannot
+// be read, every clip counts as in use.
+func (s *Server) clipsInUse(ctx context.Context) func(name string) bool {
+	conf, _, cerr := s.d.Config.Current()
+	streams, err := s.d.Store.Streams(ctx)
+	return func(name string) bool {
+		if cerr != nil || err != nil || bytes.Contains(conf, []byte(name)) {
+			return true
+		}
+		return slices.ContainsFunc(streams, func(st store.Stream) bool { return st.ClipAAC == name || st.ClipOpus == name })
 	}
 }
 
 // backupCheck is the dry run: the backup is decrypted into a directory under state/, every entry checked, the
-// database inspected and mediamtx.yml validated (with the backup's clips, which are added to the holding directory
-// under their own names when missing: names are content hashes, nothing is overwritten, and they are removed again
-// if the restore does not happen). Nothing else changes. The result stays ready to restore for 15 minutes.
+// database inspected (and its copy migrated) and mediamtx.yml vetted like a config edit and validated (with the
+// backup's clips, which are added to the holding directory under their own names when missing: names are content
+// hashes, nothing is overwritten, and they are removed again if the restore does not happen). Nothing else changes.
+// The result stays ready to restore for 15 minutes.
 func (s *Server) backupCheck(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	name, ok := backupParam(w, r)
@@ -682,14 +738,21 @@ func (s *Server) stage(ctx context.Context, name, passphrase string) (*stagedRes
 	if err := s.d.Config.Rules.Check(conf); err != nil {
 		return nil, http.StatusUnprocessableEntity, fmt.Errorf("the backup's mediamtx.yml is refused: %w", err)
 	}
-	st.clips = ex.Clips
-	if st.added, err = s.placeClips(dir, ex.Clips); err != nil {
+	// The same guard as every config edit through the UI: no hook added, changed or removed, every new source and
+	// forward destination vetted. FinishRestore applies it again when it writes the file.
+	current, _, err := s.d.Config.Current()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if err := s.guardEdit(current, conf); err != nil {
+		return nil, http.StatusUnprocessableEntity, fmt.Errorf("the backup's mediamtx.yml is refused: %w", err)
+	}
+	if err := s.placeClips(dir, ex.Clips); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	if err := s.d.Config.Validate(ctx, conf); err != nil {
 		return nil, http.StatusUnprocessableEntity, fmt.Errorf("the backup's mediamtx.yml is refused: %w", err)
 	}
-	current, _, _ := s.d.Config.Current()
 	users, _ := s.d.Store.Users(ctx)
 	streams, _ := s.d.Store.Streams(ctx)
 	st.preview = RestorePreview{
@@ -711,41 +774,51 @@ func (s *Server) stage(ctx context.Context, name, passphrase string) (*stagedRes
 }
 
 // placeClips copies a staged backup's clips into the holding directory where no clip of that name exists yet (the
-// names are content hashes or the built-in clips, so an existing one is the same clip). It returns the names added.
-func (s *Server) placeClips(dir string, clips []string) ([]string, error) {
+// names are content hashes or the built-in clips, so an existing one is the same clip). The names it adds go into
+// dir/added.json before the first clip does, so that dropStaging finds them whatever happens next.
+func (s *Server) placeClips(dir string, clips []string) error {
 	root, err := os.OpenRoot(s.d.Settings.HoldingDir)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer root.Close()
+	var missing []int
 	var added []string
 	for i, name := range clips {
 		if !backup.ClipName.MatchString(name) { // checked by Extract already; never a path
-			return added, fmt.Errorf("clip name %q", name)
+			return fmt.Errorf("clip name %q", name)
 		}
-		if _, err := root.Stat(name); err == nil {
-			continue
+		if _, err := root.Stat(name); err != nil {
+			missing, added = append(missing, i), append(added, name)
 		}
+	}
+	if len(added) == 0 {
+		return nil
+	}
+	b, _ := json.Marshal(added)
+	if err := os.WriteFile(filepath.Join(dir, addedFile), b, 0o600); err != nil {
+		return err
+	}
+	for _, i := range missing {
 		in, err := os.Open(filepath.Join(dir, backup.ClipFile(i)))
 		if err != nil {
-			return added, err
+			return err
 		}
-		out, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		out, err := root.OpenFile(clips[i], os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
 			_ = in.Close()
-			return added, err
+			return err
 		}
-		added = append(added, name)
 		_, err = io.Copy(out, in)
 		_ = in.Close()
 		if cerr := out.Close(); err == nil {
 			err = cerr
 		}
 		if err != nil {
-			return added, err
+			return err
 		}
 	}
-	return added, nil
+	return nil
 }
 
 func (s *Server) backupCancel(w http.ResponseWriter, r *http.Request) {
@@ -784,7 +857,10 @@ func (s *Server) backupRestore(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	b, _ := json.Marshal(st.ex)
+	ex := st.ex // with who asked, for the entry the start records in the restored database
+	ex.By, _ = actor(r)
+	ex.IP = clientip.From(ctx).IP.String()
+	b, _ := json.Marshal(ex)
 	if err := os.WriteFile(filepath.Join(st.dir, readyFile), b, 0o600); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "The restore could not be prepared.")
 		return

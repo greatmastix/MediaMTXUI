@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
+	"os"
+	"slices"
 )
 
 // Backups: a consistent copy of the database, and the checks a copy passes before it is restored.
@@ -48,9 +51,13 @@ type Inspection struct {
 // ErrNotRestorable explains why a database file cannot be restored here.
 var ErrNotRestorable = errors.New("the backup's database cannot be restored here")
 
-// Inspect opens a database file read-only and checks that this server can take it: intact, from this software (its
-// triggers and views are this server's, word for word: nothing in it runs anything else), a schema no newer than
-// this server's, set up, with an admin.
+// Inspect checks that this server can take a database file, and brings it up to this server's schema: intact, from
+// this software (its triggers and views are this server's, word for word: nothing in it runs anything else), a
+// schema no newer than this server's, set up, with an admin. Those checks read the file read-only. A file that
+// passes them is then migrated in place, as the start after a restore would do (it is the restore's own copy, which
+// that start opens as it is), and afterwards its triggers and views must be exactly this server's. So a database
+// whose migrations fail is refused here and not at that start, and so is one without the audit log's append-only
+// triggers (a migration recorded as applied never creates them again).
 func (s *Store) Inspect(ctx context.Context, path string) (Inspection, error) {
 	var in Inspection
 	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=query_only(1)&_pragma=trusted_schema(0)")
@@ -116,7 +123,83 @@ func (s *Store) Inspect(ctx context.Context, path string) (Inspection, error) {
 			return fail("%s cannot be read", c.table)
 		}
 	}
+	_ = db.Close()
+	migrated, err := migrateFile(ctx, path)
+	if err != nil {
+		return fail("this server's migrations fail on it (%v)", err)
+	}
+	for name, def := range ours {
+		if migrated[name] != def {
+			return fail("it lacks this server's %s", name)
+		}
+	}
+	for name := range migrated {
+		if _, ok := ours[name]; !ok {
+			return fail("it has a trigger or view this server does not (%q)", name)
+		}
+	}
 	return in, nil
+}
+
+// migrateFile runs this server's migrations on a database file the way Open does, and returns its triggers and views
+// afterwards. Like Inspect's read, it lets nothing in the file's schema call a function that is not harmless.
+func migrateFile(ctx context.Context, path string) (map[string]string, error) {
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=trusted_schema(0)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate")
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	if err := migrate(ctx, db); err != nil {
+		return nil, err
+	}
+	return schemaObjects(ctx, db)
+}
+
+// CarryAudit appends the audit log of the database a restore replaced (the file at path, in state/pre-restore/) to
+// this one's, leaving out the entries this one has already, word for word, and returns how many it added. A
+// restored database brings the backup's log as it was when the backup was made; with this, a restore never takes
+// an entry out of the log. What happened here up to the restore follows the backup's entries (under new ids), and
+// an entry missing from or changed in the backup is there as it was. Running it again adds nothing.
+func (s *Store) CarryAudit(ctx context.Context, path string) (int64, error) {
+	if _, err := os.Stat(path); err != nil {
+		return 0, err // ATTACH would create an empty database
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `ATTACH DATABASE ? AS replaced`, path); err != nil {
+		return 0, err
+	}
+	defer conn.ExecContext(context.WithoutCancel(ctx), `DETACH DATABASE replaced`) //nolint:errcheck // nothing on the connection is still running
+	res, err := conn.ExecContext(ctx, `INSERT INTO main.audit_log (at, actor, actor_user_id, ip, action, target, details)
+		SELECT r.at, r.actor, r.actor_user_id, r.ip, r.action, r.target, r.details FROM replaced.audit_log r
+		WHERE NOT EXISTS (SELECT 1 FROM main.audit_log m WHERE m.at = r.at AND m.actor = r.actor
+			AND m.actor_user_id IS r.actor_user_id AND m.ip = r.ip AND m.action = r.action AND m.target = r.target
+			AND m.details = r.details)
+		ORDER BY r.id`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// SetMetas stores several values in the key-value table together: all of them, or on an error none (the backup
+// key's two halves are useless apart).
+func (s *Store) SetMetas(ctx context.Context, values map[string]string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // after Commit, a no-op
+	for _, k := range slices.Sorted(maps.Keys(values)) {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO meta (key, value) VALUES (?, ?)
+			ON CONFLICT (key) DO UPDATE SET value = excluded.value`, k, values[k]); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func schemaObjects(ctx context.Context, db *sql.DB) (map[string]string, error) {
