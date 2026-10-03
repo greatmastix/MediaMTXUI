@@ -16,7 +16,7 @@ viewer changing settings). An admin can change everything by design; the host an
   parameters is upgraded at the next sign-in.
   *Evidence:* `TestHashAndVerify`, `TestRejectsTamperedHashes` (internal/auth).
 - [x] **Guessing is slow and does not reveal accounts.** Sign-ins are rate-limited per client address; five failures
-  lock a username for 15 minutes, unknown usernames lock the same way, and an unknown username costs the same time
+  lock a username for 15 minutes from that client address (so nobody can lock you out everywhere), unknown usernames lock the same way, and an unknown username costs the same time
   as a wrong password. The lock table and the hasher's queue are bounded, so a flood of attempts cannot grow memory
   or queue CPU work; past the bound, sign-in answers "busy".
   *Evidence:* `TestLoginRateLimit`, `TestLoginTimingIsEqualised` (internal/app), `TestLockout`,

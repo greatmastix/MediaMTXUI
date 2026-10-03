@@ -17,6 +17,12 @@ platforms, holding screens, logs and backups. HTTPS with Let's Encrypt is built 
 
 ## Install
 
+> [!TIP]
+> **New to servers or Docker?** The [documentation](docs/README.md) starts from zero: [choosing a
+> server](docs/before-you-start.md), [installing Docker](docs/install-docker.md), then [the install step by
+> step](docs/install.md) with what you should see at each step. On a home or studio network without a domain:
+> [Local network only](docs/install-local.md).
+
 You need a Linux host with Docker (with the Compose plugin), and a domain name pointing at it (an A record: see
 [Ports](#ports)).
 
@@ -102,59 +108,37 @@ apart.
 | ![Multi-view](docs/screenshots/watch.png) | ![A stream's page](docs/screenshots/stream.png) |
 | ![Configuration](docs/screenshots/configuration.png) | ![Logs](docs/screenshots/logs.png) |
 
-## Configuration
+## Documentation
 
-`.env.example` lists the settings an install usually needs: where recordings and backups are kept, a recordings
-storage budget, the published ports. Every setting of the sidecar is in [docs/config.md](docs/config.md). Set the
-others in a `compose.override.yaml` next to `compose.yaml`, not in `compose.yaml` itself, which an upgrade replaces.
-Compose reads the override by itself (unless `.env` sets `COMPOSE_FILE`: then add it to that list):
+The [documentation](docs/README.md) covers everything in detail:
 
-```yaml
-services:
-  sidecar:
-    environment:
-      MTXUI_RECORDINGS_MIN_FREE_GB: "4"
-      MTXUI_RECORDINGS_CRITICAL_FREE_GB: "1"
-```
-
-MediaMTX itself is configured in the UI.
-
-**Behind your own reverse proxy** (Caddy, nginx, Traefik): the sidecar then serves plain HTTP on `127.0.0.1:8080`
-and leaves HTTPS to the proxy. See [docs/behind-a-proxy.md](docs/behind-a-proxy.md).
-
-**Recordings on another disk**: set `RECORDINGS_PATH=/srv/recordings` in `.env` (a directory owned by uid 10002).
-
-**Recordings and free space**: whatever the storage budget, the oldest recordings are deleted (never a stream's
-newest segment) while the recordings disk has less than 20 GB free. For the default volume, that is the disk Docker
-keeps its data on. Below 5 GB free, recording is switched off for every stream until an admin switches it back on,
-which takes 20 GB free again. On a small disk (a Raspberry Pi's SD card, a small VPS) lower both limits, as in the
-example above; `MTXUI_RECORDINGS_MIN_FREE_GB: "0"` deletes nothing for free space.
+- **Getting started**: [Before you start](docs/before-you-start.md), [Install Docker](docs/install-docker.md),
+  [Install](docs/install.md), [Local network only](docs/install-local.md), [First steps](docs/first-steps.md)
+- **Streaming**: [Streams](docs/streams.md), [Encoders](docs/encoders.md) (OBS, ffmpeg, cameras),
+  [Watching](docs/watching.md), [Forwarding](docs/forwarding.md), [Holding screens](docs/holding-screens.md)
+- **Administration**: [People and access](docs/people.md), [Configuration](docs/configuration.md),
+  [Recordings](docs/recordings.md), [Logs and audit](docs/logs-and-audit.md)
+- **Running a server**: [Upgrading](docs/upgrading.md), [Backups](docs/backups.md),
+  [Behind a reverse proxy](docs/behind-a-proxy.md), [All settings](docs/config.md),
+  [Troubleshooting](docs/troubleshooting.md), [FAQ](docs/faq.md)
 
 ## Upgrading
 
-Download the new release's `compose.yaml` (and, the same way, any override from the docs that you use), then
-recreate the stack:
+Download the new release's `compose.yaml` (and any override you use), then recreate the stack:
 
 ```bash
 curl -fsSLO https://github.com/greatmastix/MediaMTXUI/releases/latest/download/compose.yaml
 docker compose pull && docker compose up -d
 ```
 
-The database migrates by itself. Each release is built and tested against one MediaMTX version, and its
-`compose.yaml` names both images: the sidecar of that release and that MediaMTX. So upgrade by replacing the file,
-never one image alone (`docker compose pull` by itself keeps the versions you have). For a particular release
-instead of the latest, download from `releases/download/v1.2.3/` instead of `releases/latest/download/`; the
-[releases](https://github.com/greatmastix/MediaMTXUI/releases) say what changed.
+The database migrates by itself. Never upgrade one image alone: each release's `compose.yaml` names the sidecar and
+the MediaMTX it was tested with. Details, and how to go back: [Upgrading](docs/upgrading.md).
 
 ## Backups
 
-Set a passphrase on the **Backups** page: from then on a backup is made every night (and whenever you press "Back up
-now"), encrypted with it. A backup holds people, streams and their keys, the configuration and its history, holding
-clips, chart history and the audit log; not the recordings. Download one now and then to keep a copy off the server,
-and keep the passphrase somewhere safe: without it, nobody can open a backup.
-
-To restore, on the same or a fresh server: upload the file on the Backups page, enter its passphrase, check what the
-restore will change, and restore. The UI restarts with the backup in a few seconds; MediaMTX keeps running.
+Set a passphrase on the **Backups** page: from then on a backup is made every night, encrypted with it. Download one
+now and then to keep a copy off the server, and keep the passphrase safe: without it, nobody can open a backup.
+Restoring and moving to a new server: [Backups](docs/backups.md).
 
 ## Security
 
@@ -179,17 +163,15 @@ a firewall in front of Docker that ufw rules control; see [docs/exposure-control
 ## Troubleshooting
 
 - **No certificate / the browser warns**: `docker compose logs sidecar` says why. Usually the domain does not point at
-  this host yet, or ports 80 and 443 are not reachable from the internet. The sidecar retries on the next visit.
+  this host yet, or ports 80 and 443 are not reachable from the internet.
 - **The encoder cannot connect**: is the stream port open in the firewall, and is the protocol on (Configuration →
-  Quick setup → Choose the protocols)? The stream's page says what it sees, and **Logs** shows MediaMTX's side.
+  Quick setup → Choose the protocols to serve)? The stream's page says what it sees, and **Logs** shows MediaMTX's side.
 - **The browser plays nothing, or only after a while**: WebRTC needs UDP 8189; without it the player falls back to
-  HLS, a few seconds behind. Encoders that send B-frames (OBS's x264 default) can only be watched over HLS; the stream
-  page says so.
-- **Lost a password**: another admin presses **Reset password** on the **People** page and passes on the join code
-  it shows, which lets you choose a new password once. Lost the authenticator app: sign in with a recovery code, or
-  have another admin press **Reset second factor** there. With no other admin, make the code on the server:
-  `docker compose exec sidecar /mtxui reset-password --username NAME`, then open `/join` and enter it. Restoring a
-  backup does not help (it brings back the same accounts and passwords).
+  HLS. Encoders that send B-frames (OBS's x264 default) can only be watched over HLS.
+- **Lost the only admin's password**: `docker compose exec sidecar /mtxui reset-password --username NAME`, then open
+  `/join` and enter the code it prints.
+
+Everything else, by symptom, and what each warning in the UI means: [Troubleshooting](docs/troubleshooting.md).
 
 ## Development
 

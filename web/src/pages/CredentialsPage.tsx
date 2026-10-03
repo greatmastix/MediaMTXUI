@@ -393,7 +393,8 @@ function CredentialTable({ credentials }: { credentials: Credential[] }) {
   if (credentials.length === 0) {
     return (
       <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-        No credentials yet: nobody can publish or read until one exists.
+        No credentials yet. Streams have their own keys; a credential is for paths set up in
+        Configuration.
       </p>
     )
   }

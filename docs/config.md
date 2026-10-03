@@ -24,7 +24,7 @@ The sidecar reads these environment variables. `compose.yaml` sets the ones an i
 | `MTXUI_HOLDING_DIR` | `/holding` | Holding clips, played while nobody streams to a stream. MediaMTX must see the directory at the same path (read-only), since `mediamtx.yml` names the files by it. |
 | `MTXUI_RECORDINGS_MAX_GB` | `0` | Storage budget for recordings in GB (decimals allowed); the oldest segments are deleted, through MediaMTX's API, to stay under it. 0 means no budget (free space still applies). Files MediaMTX does not list count toward it but are never deleted; a banner says so when they alone exceed it. |
 | `MTXUI_RECORDINGS_MIN_FREE_GB` | `20` | Free space to keep on the recordings filesystem: below it, the oldest segments are deleted. |
-| `MTXUI_RECORDINGS_CRITICAL_FREE_GB` | `5` | Free space below which recording is switched off for every path (with a banner and an audit entry) until an admin switches it back on. Less than MTXUI_RECORDINGS_MIN_FREE_GB. |
+| `MTXUI_RECORDINGS_CRITICAL_FREE_GB` | `5` | Free space below which recording is switched off for every path (with a banner and an audit entry) until an admin switches it back on. Less than MTXUI_RECORDINGS_MIN_FREE_GB, unless that is 0. |
 | `MTXUI_RECORDINGS_CHECK_EVERY` | `1m` | How often recordings' disk use is measured and the budget enforced (1s to 1h). |
 | `MTXUI_EXPORT_MAX_DURATION` | `2h` | Longest range one recording export may cover (1m to 24h). |
 | `MTXUI_EXPORT_MAX_GB` | `8` | Largest recording export in GB: the download stops there. |
@@ -39,5 +39,5 @@ The sidecar reads these environment variables. `compose.yaml` sets the ones an i
 | `MTXUI_SESSION_IDLE_TIMEOUT` | `12h` | A session ends after this long without a request (5m to 720h). |
 | `MTXUI_SESSION_MAX_AGE` | `168h` | A session ends this long after sign-in, however active (at least the idle timeout, at most 2160h). |
 | `MTXUI_LOGIN_RATE_PER_MINUTE` | `20` | Sign-in attempts allowed per client IP and minute (1 to 600). |
-| `MTXUI_LOCKOUT_THRESHOLD` | `5` | Failed sign-ins for one username before it is locked (1 to 100). Unknown usernames lock the same way, so locks reveal nothing. |
+| `MTXUI_LOCKOUT_THRESHOLD` | `5` | Failed sign-ins for one username from one client address before that address is locked out of it (1 to 100), so a stranger cannot lock you out everywhere. Unknown usernames lock the same way, so locks reveal nothing. |
 | `MTXUI_LOCKOUT_DURATION` | `15m` | How long a locked username stays locked (1m to 24h). |

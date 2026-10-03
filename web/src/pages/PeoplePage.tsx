@@ -42,7 +42,7 @@ import { atLeast } from '@/lib/roles'
 const roles: { value: Person['role']; label: string }[] = [
   { value: 'streamer', label: 'Streamer: their own streams only' },
   { value: 'viewer', label: 'Viewer: watches everything, changes nothing' },
-  { value: 'operator', label: 'Operator: also kicks connections and manages streams' },
+  { value: 'operator', label: 'Operator: also manages every stream and disconnects encoders' },
   { value: 'admin', label: 'Admin: everything' },
 ]
 

@@ -24,7 +24,7 @@ export const targets: Target[] = [
   {
     id: 'twitch',
     label: 'Twitch',
-    use: 'Streaming on to Twitch (forwarding comes in a later version).',
+    use: 'Streaming on to Twitch, or forwarding to it from the stream page.',
     obs: [
       { setting: 'Output → Encoder', value: 'x264, NVENC H.264 or AMD H.264' },
       { setting: 'Rate control', value: 'CBR' },

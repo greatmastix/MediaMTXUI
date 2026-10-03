@@ -104,7 +104,7 @@ var Vars = []Var{
 	{Name: "MTXUI_HOLDING_DIR", Default: "/holding", Description: "Holding clips, played while nobody streams to a stream. MediaMTX must see the directory at the same path (read-only), since `mediamtx.yml` names the files by it."},
 	{Name: "MTXUI_RECORDINGS_MAX_GB", Default: "0", Description: "Storage budget for recordings in GB (decimals allowed); the oldest segments are deleted, through MediaMTX's API, to stay under it. 0 means no budget (free space still applies). Files MediaMTX does not list count toward it but are never deleted; a banner says so when they alone exceed it."},
 	{Name: "MTXUI_RECORDINGS_MIN_FREE_GB", Default: "20", Description: "Free space to keep on the recordings filesystem: below it, the oldest segments are deleted."},
-	{Name: "MTXUI_RECORDINGS_CRITICAL_FREE_GB", Default: "5", Description: "Free space below which recording is switched off for every path (with a banner and an audit entry) until an admin switches it back on. Less than MTXUI_RECORDINGS_MIN_FREE_GB."},
+	{Name: "MTXUI_RECORDINGS_CRITICAL_FREE_GB", Default: "5", Description: "Free space below which recording is switched off for every path (with a banner and an audit entry) until an admin switches it back on. Less than MTXUI_RECORDINGS_MIN_FREE_GB, unless that is 0."},
 	{Name: "MTXUI_RECORDINGS_CHECK_EVERY", Default: "1m", Description: "How often recordings' disk use is measured and the budget enforced (1s to 1h)."},
 	{Name: "MTXUI_EXPORT_MAX_DURATION", Default: "2h", Description: "Longest range one recording export may cover (1m to 24h)."},
 	{Name: "MTXUI_EXPORT_MAX_GB", Default: "8", Description: "Largest recording export in GB: the download stops there."},
@@ -119,7 +119,7 @@ var Vars = []Var{
 	{Name: "MTXUI_SESSION_IDLE_TIMEOUT", Default: "12h", Description: "A session ends after this long without a request (5m to 720h)."},
 	{Name: "MTXUI_SESSION_MAX_AGE", Default: "168h", Description: "A session ends this long after sign-in, however active (at least the idle timeout, at most 2160h)."},
 	{Name: "MTXUI_LOGIN_RATE_PER_MINUTE", Default: "20", Description: "Sign-in attempts allowed per client IP and minute (1 to 600)."},
-	{Name: "MTXUI_LOCKOUT_THRESHOLD", Default: "5", Description: "Failed sign-ins for one username before it is locked (1 to 100). Unknown usernames lock the same way, so locks reveal nothing."},
+	{Name: "MTXUI_LOCKOUT_THRESHOLD", Default: "5", Description: "Failed sign-ins for one username from one client address before that address is locked out of it (1 to 100), so a stranger cannot lock you out everywhere. Unknown usernames lock the same way, so locks reveal nothing."},
 	{Name: "MTXUI_LOCKOUT_DURATION", Default: "15m", Description: "How long a locked username stays locked (1m to 24h)."},
 }
 

@@ -673,9 +673,9 @@ function StepUpSetting({ account: a }: { account: Account }) {
         <span>
           <span className="font-medium">Ask me before admin-level changes</span>
           <span className="block text-xs text-muted-foreground">
-            People and roles, credentials, the YAML editor and restoring versions, exposure: your
-            password, an app code or a passkey, at most once an hour. If someone got hold of your
-            signed-in browser, this stops them there.
+            People and roles, credentials, the YAML editor and restoring versions, exposure,
+            backups: your password, an app code or a passkey, at most once an hour. If someone got
+            hold of your signed-in browser, this stops them there.
           </span>
         </span>
       </label>
