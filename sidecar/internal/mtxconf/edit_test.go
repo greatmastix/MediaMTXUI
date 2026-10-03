@@ -159,7 +159,7 @@ func TestWatch(t *testing.T) {
 
 	// An outside edit that breaks the rules is reverted, and what it was is kept for the audit log.
 	bad := strings.Replace(string(own), "authMethod: http", "authMethod: internal", 1)
-	_ = os.WriteFile(w.Path, []byte(bad), 0o640)
+	replaceFile(t, w.Path, []byte(bad))
 	out := next()
 	if !out.Notable || string(out.Rejected) != bad || !strings.Contains(out.Message, "restored snapshot") {
 		t.Fatalf("invalid edit: %+v", out)
@@ -169,7 +169,7 @@ func TestWatch(t *testing.T) {
 	}
 
 	// A valid one is recorded.
-	_ = os.WriteFile(w.Path, append(append([]byte{}, own...), "# hand-edited\n"...), 0o640)
+	replaceFile(t, w.Path, append(append([]byte{}, own...), "# hand-edited\n"...))
 	if out := next(); !out.Notable || out.Rejected != nil || !strings.Contains(out.Message, "recorded as snapshot") {
 		t.Fatalf("valid edit: %+v", out)
 	}
@@ -183,25 +183,46 @@ func TestWatch(t *testing.T) {
 	}
 }
 
-func TestOutboundChanges(t *testing.T) {
-	before := []byte("paths:\n  cam1:\n    source: rtsp://127.0.0.1/x\n  cam2:\n    forward:\n      - dest: rtmp://a/live\n")
-	after := []byte("pathDefaults:\n  source: publisher\npaths:\n  cam1:\n    source: rtsp://127.0.0.1/x\n  cam2:\n" +
-		"    forward:\n      - dest: rtmp://a/live\n      - dest: srt://b:9000\n  cam3:\n    source: rtsp://c/x\n")
-	got, err := OutboundChanges(before, after)
-	if err != nil {
+// replaceFile changes the file in one step (temp file, rename), so that a look never sees it half-written: what is
+// tested here is how a change is judged; TestWatchWaitsForAWriteToFinish covers a file caught mid-write.
+func replaceFile(t *testing.T, path string, b []byte) {
+	t.Helper()
+	tmp := path + ".test-tmp"
+	if err := os.WriteFile(tmp, b, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	want := []Outbound{
-		{"pathDefaults.source", "source", "publisher"},
-		{"paths.cam2.forward", "forward", "srt://b:9000"},
-		{"paths.cam3.source", "source", "rtsp://c/x"},
+	if err := os.Rename(tmp, path); err != nil {
+		t.Fatal(err)
 	}
-	if len(got) != len(want) {
-		t.Fatalf("got %+v", got)
+}
+
+// A file caught in the middle of being written (empty after the truncate, before the write) is not judged: the
+// finished edit is recorded, not reverted as an empty config.
+func TestWatchWaitsForAWriteToFinish(t *testing.T) {
+	ctx := context.Background()
+	w, _ := newWriter(t, fakeChecker{})
+	good := seed(t, params)
+	if _, err := w.Reconcile(ctx, good); err != nil {
+		t.Fatal(err)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("%d: %+v, want %+v", i, got[i], want[i])
-		}
+	var pending string
+	if _, judged, _ := w.look(ctx, good, &pending); judged {
+		t.Fatal("an unchanged file was judged")
+	}
+	_ = os.WriteFile(w.Path, nil, 0o640) // truncated: the editor has not written yet
+	if out, judged, _ := w.look(ctx, good, &pending); judged {
+		t.Fatalf("judged mid-write: %+v", out)
+	}
+	edited := append(append([]byte{}, good...), "# hand-edited\n"...)
+	_ = os.WriteFile(w.Path, edited, 0o640)
+	if out, judged, _ := w.look(ctx, good, &pending); judged {
+		t.Fatalf("judged at the first look at the new content: %+v", out)
+	}
+	out, judged, err := w.look(ctx, good, &pending)
+	if !judged || err != nil || out.Rejected != nil || !strings.Contains(out.Message, "recorded as snapshot") {
+		t.Fatalf("the finished edit: judged %v, %+v, %v", judged, out, err)
+	}
+	if now, _, _ := w.Current(); string(now) != string(edited) {
+		t.Fatal("the edit did not stay")
 	}
 }

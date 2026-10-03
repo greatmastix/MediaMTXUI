@@ -321,27 +321,54 @@ func (w *Writer) Reconcile(ctx context.Context, seed []byte) (Outcome, error) {
 }
 
 // Watch runs Reconcile every interval, skipping the work while the file's hash is the one last seen, and hands each
-// outcome that did something to report. It returns when ctx ends.
+// outcome that did something to report. After a change it looks again soon (settle), so that a change is judged
+// quickly once it holds still (look). It returns when ctx ends.
 func (w *Writer) Watch(ctx context.Context, interval time.Duration, seed []byte, report func(Outcome, error)) {
-	t := time.NewTicker(interval)
+	settle := min(interval, 250*time.Millisecond)
+	t := time.NewTimer(interval)
 	defer t.Stop()
+	var pending string
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
-		if b, err := os.ReadFile(w.Path); err == nil && sha(b) == w.known() {
-			continue
+		out, judged, err := w.look(ctx, seed, &pending)
+		if pending != "" {
+			t.Reset(settle)
+		} else {
+			t.Reset(interval)
 		}
-		out, err := w.Reconcile(ctx, seed)
 		if ctx.Err() != nil {
 			return
 		}
-		if err != nil || out.Message != "" {
+		if judged && (err != nil || out.Message != "") {
 			report(out, err)
 		}
 	}
+}
+
+// look is one of Watch's looks at the file. A change is judged (Reconcile) once two looks in a row find the same
+// content: an editor that truncates the file and then writes it would otherwise be caught in between, and its edit
+// taken for an empty config and reverted. pending holds what the changed file held at the last look.
+func (w *Writer) look(ctx context.Context, seed []byte, pending *string) (Outcome, bool, error) {
+	b, err := os.ReadFile(w.Path)
+	seen := "error: " + fmt.Sprint(err)
+	if err == nil {
+		seen = sha(b)
+	}
+	if seen == w.known() {
+		*pending = ""
+		return Outcome{}, false, nil
+	}
+	if seen != *pending {
+		*pending = seen // changed since the last look: it may still be being written
+		return Outcome{}, false, nil
+	}
+	*pending = ""
+	out, err := w.Reconcile(ctx, seed)
+	return out, true, err
 }
 
 func (w *Writer) remember(sum string) {
