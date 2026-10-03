@@ -1,6 +1,12 @@
 // Package mtxlog follows MediaMTX's log file for what the stream pages should explain to whoever streams: an encoder
 // MediaMTX refused because its tracks do not match the holding clip, and an encoder whose B-frames browsers cannot
 // play over WebRTC. MediaMTX reports both only in its log. The notes are kept in memory for a while, per path.
+//
+// MediaMTX writes client-chosen text into its log, before any authentication: a rejected path name or SRT stream id
+// in a close reason. So a message counts only whole, by how it begins, which MediaMTX writes itself. That text can
+// hold a line break, though, which MediaMTX's plain format writes raw: what follows then reads as a line of its own
+// and can pass for any line here, a refusal included, which can switch a holding version. Only the structured format
+// (logStructured) quotes it; see logs.ParseMediaMTX.
 package mtxlog
 
 import (
@@ -15,6 +21,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"mtxui/internal/logs"
+	"mtxui/internal/pathname"
 )
 
 // Note is something about a stream's encoder, for people.
@@ -29,15 +38,18 @@ const (
 	keepNotes     = 15 * time.Minute // how long a note stays on the page
 	publishWindow = 30 * time.Second // a refusal this soon after a publish from the same address belongs to it
 	maxNotes      = 5                // per path
+	maxPaths      = 1000             // paths with notes; beyond, the one noted longest ago is forgotten
 	maxSessions   = 2000             // WebRTC sessions remembered (path and address)
 )
 
+// The messages read (logs.ParseMediaMTX took off time and level), matched whole: MediaMTX begins each with the
+// server and the connection, and client-chosen text comes only later.
 var (
-	reReading = regexp.MustCompile(`\[WebRTC\] \[session (\w+)\] is (?:reading from|publishing to) path '([^']+)'`)
-	reCreated = regexp.MustCompile(`\[WebRTC\] \[session (\w+)\] created by ([^ ]+)`)
-	reBFrames = regexp.MustCompile(`\[WebRTC\] \[session (\w+)\] closed: WebRTC doesn't support H264 streams with B-frames`)
-	reRefused = regexp.MustCompile(`\[(?:RTMP|RTMPS|SRT|RTSP|RTSPS|WebRTC)\] \[(?:conn|session) ([^\]]+)\] closed: ` +
-		`(wants to publish \[([^\]]*)\], but stream expects \[([^\]]*)\]|(?:MPEG-4 audio|G711|LPCM) configuration does not match.*)`)
+	reReading = regexp.MustCompile(`^\[WebRTC\] \[session (\w+)\] is (?:reading from|publishing to) path '([^']+)'(?:, .*)?$`)
+	reCreated = regexp.MustCompile(`^\[WebRTC\] \[session (\w+)\] created by (\S+)$`)
+	reBFrames = regexp.MustCompile(`^\[WebRTC\] \[session (\w+)\] closed: WebRTC doesn't support H264 streams with B-frames$`)
+	reRefused = regexp.MustCompile(`^\[(?:RTMP|RTMPS|SRT|RTSP|RTSPS|WebRTC)\] \[(?:conn|session) ([^\]]+)\] closed: ` +
+		`(wants to publish \[([^\]]*)\], but stream expects \[([^\]]*)\]|(?:MPEG-4 audio|G711|LPCM) configuration does not match, .*)$`)
 )
 
 // Notes collects the notes.
@@ -57,8 +69,9 @@ type Notes struct {
 }
 
 type published struct {
-	path string
-	at   time.Time
+	path  string
+	at    time.Time
+	other time.Time // when the address last published to another path
 }
 
 type session struct {
@@ -77,7 +90,12 @@ func New() *Notes {
 func (n *Notes) Publish(path string, ip netip.Addr) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.published[ip] = published{path, n.now()}
+	p := n.published[ip]
+	if p.path != path {
+		p.other = p.at
+	}
+	p.path, p.at = path, n.now()
+	n.published[ip] = p
 	if len(n.published) > 1000 {
 		for k, v := range n.published {
 			if n.now().Sub(v.at) > publishWindow {
@@ -124,6 +142,33 @@ func (n *Notes) add(path string, note Note) {
 		list = list[len(list)-maxNotes:]
 	}
 	n.notes[path] = list
+	if len(n.notes) > maxPaths {
+		n.forget()
+	}
+}
+
+// forget drops the paths whose notes are all too old to show, then, while there are too many, the one noted
+// longest ago.
+func (n *Notes) forget() {
+	now := n.now()
+	newest := func(path string) time.Time {
+		list := n.notes[path]
+		return list[len(list)-1].At
+	}
+	for path := range n.notes {
+		if now.Sub(newest(path)) >= keepNotes {
+			delete(n.notes, path)
+		}
+	}
+	for len(n.notes) > maxPaths {
+		oldest := ""
+		for path := range n.notes {
+			if oldest == "" || newest(path).Before(newest(oldest)) {
+				oldest = path
+			}
+		}
+		delete(n.notes, oldest)
+	}
 }
 
 func (n *Notes) remember(id string, update func(*session)) {
@@ -148,9 +193,13 @@ func addrOf(hostport string) (netip.Addr, bool) {
 	return ip.Unmap(), err == nil
 }
 
-// Line reads one line of MediaMTX's log.
+// Line reads one line of MediaMTX's log, plain or structured.
 func (n *Notes) Line(line string) {
-	if path, sends, expects, ok := n.line(line); ok && n.OnRefused != nil {
+	l := logs.ParseMediaMTX(line)
+	if l.T == 0 {
+		return // not in MediaMTX's shape
+	}
+	if path, sends, expects, ok := n.message(l.Text); ok && n.OnRefused != nil {
 		if note := n.OnRefused(path, sends, expects); note != nil {
 			n.Add(path, *note)
 			return
@@ -167,22 +216,25 @@ func refusedNote(sends, expects string) Note {
 		". Set what your encoder sends under Holding screen, or switch the holding screen off."}
 }
 
-// line reads one line; a refusal for tracks that do not match is returned for Line to note (or hand on).
-func (n *Notes) line(line string) (path, sends, expects string, refused bool) {
+// message reads one message; a refusal for tracks that do not match is returned for Line to note (or hand on). What
+// it keeps is copied out of the message, which would otherwise stay in memory whole.
+func (n *Notes) message(msg string) (path, sends, expects string, refused bool) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	now := n.now()
-	if m := reCreated.FindStringSubmatch(line); m != nil {
+	if m := reCreated.FindStringSubmatch(msg); m != nil {
 		if ip, ok := addrOf(m[2]); ok {
-			n.remember(m[1], func(s *session) { s.ip = ip })
+			n.remember(strings.Clone(m[1]), func(s *session) { s.ip = ip })
 		}
 		return "", "", "", false
 	}
-	if m := reReading.FindStringSubmatch(line); m != nil {
-		n.remember(m[1], func(s *session) { s.path = m[2] })
+	if m := reReading.FindStringSubmatch(msg); m != nil {
+		if pathname.Valid(m[2]) == nil { // the only names a stream page asks for
+			n.remember(strings.Clone(m[1]), func(s *session) { s.path = strings.Clone(m[2]) })
+		}
 		return "", "", "", false
 	}
-	if m := reBFrames.FindStringSubmatch(line); m != nil {
+	if m := reBFrames.FindStringSubmatch(msg); m != nil {
 		if s := n.sessions[m[1]]; s.path != "" {
 			n.add(s.path, Note{Kind: "bframes", At: now, Message: "Your encoder sends B-frames, which browsers cannot play " +
 				"over WebRTC, so the page and the watch link fall back to HLS, a few seconds behind. In OBS, set B-frames " +
@@ -190,13 +242,16 @@ func (n *Notes) line(line string) (path, sends, expects string, refused bool) {
 		}
 		return "", "", "", false
 	}
-	if m := reRefused.FindStringSubmatch(line); m != nil {
+	if m := reRefused.FindStringSubmatch(msg); m != nil {
 		ip, ok := addrOf(m[1])
 		if !ok {
 			ip = n.sessions[m[1]].ip
 		}
+		// The log names the address only: the refusal belongs to the path published from it just before, unless it
+		// published to another path as well (one encoder sending two streams, or a NAT). Acting on the wrong one
+		// would switch its holding version, so neither hears of it.
 		p, found := n.published[ip]
-		if !found || now.Sub(p.at) > publishWindow {
+		if !found || now.Sub(p.at) > publishWindow || now.Sub(p.other) <= publishWindow {
 			return "", "", "", false
 		}
 		if m[3] != "" {

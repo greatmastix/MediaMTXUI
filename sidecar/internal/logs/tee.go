@@ -23,7 +23,7 @@ func (t *tee) Enabled(ctx context.Context, l slog.Level) bool { return t.inner.E
 func (t *tee) Handle(ctx context.Context, r slog.Record) error {
 	err := t.inner.Handle(ctx, r)
 	var b strings.Builder
-	b.WriteString(r.Message)
+	b.WriteString(printable(r.Message))
 	b.WriteString(t.prefix)
 	r.Attrs(func(a slog.Attr) bool {
 		writeAttr(&b, t.group, a)
@@ -57,8 +57,10 @@ func writeAttr(b *strings.Builder, group string, a slog.Attr) {
 		}
 		return
 	}
+	// Quoted (escaped) when it would not read as one value on one line: values can hold client-chosen text, such as
+	// the user name of a denied authentication.
 	s := v.String()
-	if strings.ContainsAny(s, " \"=") || s == "" {
+	if strings.ContainsAny(s, " \"=") || strings.ContainsFunc(s, notPrint) || s == "" {
 		s = fmt.Sprintf("%q", s)
 	}
 	b.WriteString(" " + group + a.Key + "=" + s)

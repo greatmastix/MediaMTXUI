@@ -171,7 +171,12 @@ func (s *Server) logsStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// logsDownload sends MediaMTX's log with its rotated copies as one text file, oldest first.
+// logsDownload sends MediaMTX's log with its rotated copies as one text file, oldest first, exactly as MediaMTX
+// wrote it. MediaMTX writes client-chosen text into it before any authentication (a rejected path name, an SRT
+// stream id), and its plain format writes that raw, line breaks and terminal escape sequences included: a line of
+// this file can be a client's forgery, and the file is best read with a pager that escapes control characters
+// (less does). Its structured format (logStructured) quotes every message. The viewer shows what does not print
+// escaped (logs.ParseMediaMTX), but cannot tell a forged line from a real one either.
 func (s *Server) logsDownload(w http.ResponseWriter, r *http.Request) {
 	path := s.d.Settings.MediaMTXLog()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

@@ -5,6 +5,7 @@ package logs
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,26 +54,63 @@ func (f Filter) Match(l Line) bool {
 	return f.Query == "" || strings.Contains(strings.ToLower(l.Text), strings.ToLower(f.Query))
 }
 
-var reMediaMTX = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) (DEB|INF|WAR|ERR) (.*)$`)
+// MediaMTX's two formats: plain, and structured (logStructured), which quotes the message as a Go string literal
+// (strconv.Quote, so not always valid JSON: "\x1b").
+var (
+	rePlain      = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) (DEB|INF|WAR|ERR) (.*)$`)
+	reStructured = regexp.MustCompile(`^\{"timestamp":"([^"]+)","level":"(DEB|INF|WAR|ERR)","message":(".*")\}$`)
+)
 
 var mtxLevels = map[string]string{"DEB": "debug", "INF": "info", "WAR": "warn", "ERR": "error"}
 
-// ParseMediaMTX reads one line of MediaMTX's log ("2026/10/01 11:16:19 INF [RTMP] ..."). MediaMTX writes the
-// container's local time, which is UTC. A line in another shape is kept whole, as info.
+// ParseMediaMTX reads one line of MediaMTX's log, plain ("2026/10/01 11:16:19 INF [RTMP] ...") or structured
+// ({"timestamp":"2026-10-01T11:16:19.5Z","level":"INF","message":"[RTMP] ..."}). MediaMTX writes the container's
+// local time, which is UTC. A line in another shape is kept whole, as info, and has no time.
+//
+// MediaMTX writes client-chosen text into its messages (a rejected path name, an SRT stream id), before any
+// authentication. Characters that do not print are shown escaped ("\r", "\x1b", "\u202e"), so that text cannot
+// change how a line looks. A line break in it cannot be told apart, though: the plain format writes it raw, and the
+// text after it reads as a line of its own, whatever it claims to be. Only the structured format quotes it.
 func ParseMediaMTX(s string) Line {
 	s = strings.TrimRight(s, "\r\n")
-	if len(s) > maxText {
-		s = s[:maxText]
-	}
 	l := Line{Source: MediaMTX, Level: "info", Text: s}
-	if m := reMediaMTX.FindStringSubmatch(s); m != nil {
+	if m := reStructured.FindStringSubmatch(s); m != nil {
+		t, terr := time.Parse(time.RFC3339Nano, m[1])
+		msg, merr := strconv.Unquote(m[3])
+		if terr == nil && merr == nil {
+			l.T, l.Level, l.Text = t.UnixMilli(), mtxLevels[m[2]], msg
+		}
+	} else if m := rePlain.FindStringSubmatch(s); m != nil {
 		if t, err := time.ParseInLocation("2006/01/02 15:04:05", m[1], time.UTC); err == nil {
 			l.T = t.UnixMilli()
 		}
 		l.Level, l.Text = mtxLevels[m[2]], m[3]
 	}
+	l.Text = printable(l.Text)
+	if len(l.Text) > maxText {
+		l.Text = l.Text[:maxText]
+	}
 	return l
 }
+
+// printable escapes the characters of s that do not print, as strconv.Quote does.
+func printable(s string) string {
+	if !strings.ContainsFunc(s, notPrint) {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if notPrint(r) {
+			q := strconv.QuoteRune(r)
+			b.WriteString(q[1 : len(q)-1])
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func notPrint(r rune) bool { return !strconv.IsPrint(r) }
 
 // Hub fans new lines out to live tails and keeps the sidecar's own recent lines (they exist nowhere else: the
 // sidecar logs to stdout, which only Docker keeps).

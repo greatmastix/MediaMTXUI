@@ -103,6 +103,9 @@ func eachLine(name string, fn func(string) error) error {
 // (older copies move up one, and the one past keep is deleted), then the file is truncated. MediaMTX keeps its
 // file open and appends, so it simply continues at the start; lines written between the copy and the
 // truncate are lost, a window of microseconds. With keep 0 the content is dropped.
+//
+// The new copy is written before any older one moves, so a rotation that cannot write it (a full disk) leaves the
+// copies as they are: retried every minute, it does not delete them one by one.
 func Rotate(path string, maxBytes int64, keep int) (bool, error) {
 	st, err := os.Stat(path)
 	if err != nil || st.Size() <= maxBytes {
@@ -112,27 +115,33 @@ func Rotate(path string, maxBytes int64, keep int) (bool, error) {
 		return false, err
 	}
 	if keep > 0 {
-		_ = os.Remove(rotated(path, keep))
+		tmp := rotated(path, 1) + ".tmp"
+		if err := compress(path, tmp); err != nil {
+			return false, err
+		}
+		// Each copy moves over the next one up; the one at keep is replaced, so dropped.
 		for n := keep - 1; n >= 1; n-- {
 			if err := os.Rename(rotated(path, n), rotated(path, n+1)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				_ = os.Remove(tmp)
 				return false, err
 			}
 		}
-		if err := compress(path, rotated(path, 1)); err != nil {
+		if err := os.Rename(tmp, rotated(path, 1)); err != nil {
+			_ = os.Remove(tmp)
 			return false, err
 		}
 	}
 	return true, os.Truncate(path, 0)
 }
 
+// compress writes src gzipped to dst, which it removes again when that fails.
 func compress(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	tmp := dst + ".tmp"
-	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -145,10 +154,9 @@ func compress(src, dst string) error {
 		err = cerr
 	}
 	if err != nil {
-		_ = os.Remove(tmp)
-		return err
+		_ = os.Remove(dst)
 	}
-	return os.Rename(tmp, dst)
+	return err
 }
 
 // RunRotation checks the log every interval until ctx ends; report hears of every rotation and failure.
