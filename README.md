@@ -2,7 +2,7 @@
 
 # MediaMTX UI
 
-**A web UI for [MediaMTX](https://github.com/bluenviron/mediamtx): run your own streaming server, from one Docker Compose file.**
+**A web UI for [MediaMTX](https://github.com/bluenviron/mediamtx): run your own streaming server, installed with one command.**
 
 Streams with their own pages and keys, a live view and multi-view, recordings, users and roles, forwarding to other
 platforms, holding screens, logs and backups. HTTPS with Let's Encrypt is built in.
@@ -17,26 +17,38 @@ platforms, holding screens, logs and backups. HTTPS with Let's Encrypt is built 
 
 ## Install
 
-**The quick way**, on a fresh Ubuntu, Debian or Raspberry Pi OS machine: one command installs Docker if needed, asks
-whether the server is on the internet (with a domain) or on your local network only, and starts everything:
+**On a fresh Linux machine** (Ubuntu, Debian, Raspberry Pi OS; a cloud server, a home server or a Raspberry Pi):
+
+**1. Run the installer**
 
 ```bash
 curl -fsSL https://github.com/greatmastix/MediaMTXUI/releases/latest/download/install.sh | sudo bash
 ```
 
-It prints the address to open and the setup token. Run it again later to upgrade. Details:
-[Install script](docs/install-script.md).
+It installs Docker if it is missing and asks how people will reach the server:
 
-**Step by step** instead:
+- **on the internet**, at your domain with HTTPS from Let's Encrypt (the domain must point at the server, and ports
+  80 and 443 must be open), or
+- **on your local network only**, at `http://<server address>:8080`, with nothing open to the internet.
+
+**2. Open the address it prints** and enter the **setup token** it prints with it.
+
+**3. Create the first admin** and choose the protocols your encoders use. Then create a stream on the **Streams**
+page and point OBS (or ffmpeg, a camera) at the address and key it shows.
+
+That's it. To upgrade later, run the same command again. What the installer does, its options, and how to read it
+before running it: [Install script](docs/install-script.md).
 
 > [!TIP]
-> **New to servers or Docker?** The [documentation](docs/README.md) starts from zero: [choosing a
-> server](docs/before-you-start.md), [installing Docker](docs/install-docker.md), then [the install step by
-> step](docs/install.md) with what you should see at each step. On a home or studio network without a domain:
-> [Local network only](docs/install-local.md).
+> **New to servers?** The [documentation](docs/README.md) starts from zero: [choosing a
+> server](docs/before-you-start.md), [opening a terminal on it](docs/install-docker.md#open-a-terminal-on-the-server),
+> and [what to open in your firewall](#ports).
 
-You need a Linux host with Docker (with the Compose plugin), and a domain name pointing at it (an A record: see
-[Ports](#ports)).
+### Install by hand
+
+If you prefer to see every step, or Docker is already set up the way you like: you need Docker with the Compose
+plugin, and a domain name pointing at the host (an A record: see [Ports](#ports)). For a local network without a
+domain, follow [Local network only](docs/install-local.md) instead. Every step explained: [Install](docs/install.md).
 
 **1. Get the two files** of the latest release
 
@@ -65,18 +77,17 @@ docker compose up -d
 docker compose exec sidecar /mtxui setup-token
 ```
 
-That's it. The certificate is requested on the first start and renewed by itself. The setup wizard switches on the
-protocols you want; then create a stream on the **Streams** page and point your encoder (OBS, ffmpeg, a camera) at
-the address and key it shows.
+The certificate is requested on the first start and renewed by itself.
 
 > [!TIP]
 > Trying it out? Add `ACME_DIRECTORY=https://acme-staging-v02.api.letsencrypt.org/directory` to `.env` to use
 > Let's Encrypt's staging server, which has generous rate limits (browsers will warn about its certificate).
 > To switch to the real certificate, remove the line and run `docker compose up -d` again.
 
-### Ports
+## Ports
 
-Open these in your firewall or cloud provider's security group:
+For a server on the internet, open these in your firewall or cloud provider's security group (on a local network
+only, nothing needs opening; the UI is on port 8080 there):
 
 | Port | Protocol | For |
 |---|---|---|
@@ -136,7 +147,13 @@ The [documentation](docs/README.md) covers everything in detail:
 
 ## Upgrading
 
-Download the new release's `compose.yaml` (and any override you use), then recreate the stack:
+Installed with the installer: run it again, it keeps your settings.
+
+```bash
+curl -fsSL https://github.com/greatmastix/MediaMTXUI/releases/latest/download/install.sh | sudo bash
+```
+
+Installed by hand: download the new release's `compose.yaml` (and any override you use), then recreate the stack:
 
 ```bash
 curl -fsSLO https://github.com/greatmastix/MediaMTXUI/releases/latest/download/compose.yaml
