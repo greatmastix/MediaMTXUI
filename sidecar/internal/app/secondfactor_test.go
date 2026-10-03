@@ -228,8 +228,8 @@ func TestStepUp(t *testing.T) {
 	}
 }
 
-// The admin-level routes, exactly: people, credentials, every config write and restores, exposure, opting out of
-// step-up, and backups' passphrase, schedule, deletion and restore.
+// The admin-level routes, exactly: people, credentials, the raw YAML and restores, exposure, opting out of step-up,
+// and backups' passphrase, schedule, deletion and restore. The structured config edits are deliberately not here (D12).
 func TestStepUpRoutes(t *testing.T) {
 	h := newHarness(t, nil, fast)
 	var got []string
@@ -246,8 +246,6 @@ func TestStepUpRoutes(t *testing.T) {
 		"PUT /api/v1/config", "POST /api/v1/config/snapshots/{id}/restore", "PUT /api/v1/account/step-up",
 		"PUT /api/v1/backups/passphrase", "PUT /api/v1/backups/schedule", "DELETE /api/v1/backups/{name}",
 		"POST /api/v1/backups/{name}/restore",
-		"PATCH /api/v1/config/global", "PATCH /api/v1/config/path-defaults", "PUT /api/v1/config/paths/*",
-		"DELETE /api/v1/config/paths/*",
 	}
 	slices.Sort(got)
 	slices.Sort(want)
