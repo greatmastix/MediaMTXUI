@@ -61,11 +61,9 @@ func TestStreamForwards(t *testing.T) {
 	if rec := h.do("POST", base, map[string]any{"provider": "custom", "server": "rtmp://127.0.0.1/app", "key": "k"}); rec.Code != http.StatusBadRequest {
 		t.Errorf("a forward to loopback: %d %s", rec.Code, rec.Body)
 	}
-	// A stream owner's forward is a way into the host's network: private ranges are refused, as in Configuration.
-	for _, server := range []string{"rtmp://192.168.1.20/app", "srt://10.0.0.5:9000", "whip://[fd00::5]/whip"} {
-		if rec := h.do("POST", base, map[string]any{"provider": "custom", "server": server, "key": "k"}); rec.Code != http.StatusBadRequest {
-			t.Errorf("a forward to %s: %d %s", server, rec.Code, rec.Body)
-		}
+	// Link-local addresses (cloud metadata) stay out of reach, as in Configuration.
+	if rec := h.do("POST", base, map[string]any{"provider": "custom", "server": "rtmp://169.254.169.254/app", "key": "k"}); rec.Code != http.StatusBadRequest {
+		t.Errorf("a forward to the metadata address: %d %s", rec.Code, rec.Body)
 	}
 	rec := h.do("POST", base, map[string]any{"provider": "custom", "server": "rtmp://203.0.113.10/app", "key": secret, "enabled": true})
 	var f ForwardInfo

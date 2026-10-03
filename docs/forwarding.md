@@ -93,7 +93,8 @@ does that.
 - At most **5 forwards per stream**. The **Add a platform** button disappears at five.
 - The same destination with the same key cannot be added twice to one stream.
 - A key is at most 512 characters, without spaces.
-- The server checks every destination before it uses it. Addresses that point back into the server itself are refused:
+- The server checks every destination before it uses it. Other servers on your local network (`192.168.x.x`,
+  `10.x.x.x` and so on) are fine. Addresses that point back into the server itself are refused:
   loopback (`localhost`, `127.0.0.1`), the server's own Docker network, link-local addresses and cloud metadata
   services. A host name that cannot be resolved is refused too.
 

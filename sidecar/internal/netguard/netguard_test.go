@@ -75,21 +75,21 @@ func TestSources(t *testing.T) {
 func TestForward(t *testing.T) {
 	g := guard()
 	ctx := context.Background()
-	for _, ok := range []string{"rtmp://example.com/live#key", "srt://example.com:9000", "whips://example.com/x/whip"} {
+	for _, ok := range []string{
+		"rtmp://example.com/live#key", "srt://example.com:9000", "whips://example.com/x/whip",
+		// Another server on the LAN is a usual destination.
+		"rtmp://192.168.1.20/live", "srt://10.0.0.5:9000", "rtmps://[fd12::1]/live", "rtmp://100.64.3.4/live",
+	} {
 		if err := g.CheckForward(ctx, ok); err != nil {
 			t.Errorf("%q refused: %v", ok, err)
 		}
 	}
 	for bad, why := range map[string]string{
-		"rtmp://127.0.0.1/live":      "loopback",
-		"http://example.com/":        "not a forward destination",
-		"whip://sidecar:9080/x":      "resolve",
-		"RTMP://example.com/live":    "lower case", // MediaMTX would refuse it at runtime
-		"rtmp://192.168.1.20/live":   "private network",
-		"srt://10.0.0.5:9000":        "private network",
-		"rtmps://[fd12::1]/live":     "private network",
-		"rtmp://100.64.3.4/live":     "private network",
-		"rtmp://[::ffff:10.1.1.1]/x": "private network",
+		"rtmp://127.0.0.1/live":    "loopback",
+		"http://example.com/":      "not a forward destination",
+		"whip://sidecar:9080/x":    "resolve",
+		"RTMP://example.com/live":  "lower case", // MediaMTX would refuse it at runtime
+		"rtmp://169.254.169.254/x": "link-local",
 	} {
 		err := g.CheckForward(ctx, bad)
 		if err == nil || !strings.Contains(err.Error(), why) {

@@ -55,9 +55,10 @@ viewer changing settings). An admin can change everything by design; the host an
 - [x] **Every route has an access level** (public, streamer, viewer, operator, admin), and every non-public route
   refuses anonymous requests.
   *Evidence:* `TestRouteRegistry`, `TestRoles`, `TestRolesAndRouting`.
-- [x] **Streamers see only their own streams**, in the API and the event stream; MediaMTX's API is for viewers and
-  up.
-  *Evidence:* `TestStreamsAndStreamers`, `TestScopedSubscription`, `TestEventStreamsPerUser`.
+- [x] **Streamers see only their own streams**, in the API, the event stream and the recordings (play and download;
+  deleting is for operators); MediaMTX's API is for viewers and up.
+  *Evidence:* `TestStreamsAndStreamers`, `TestScopedSubscription`, `TestEventStreamsPerUser`,
+  `TestStreamerSeesOwnRecordings`.
 - [x] **MediaMTX asks the sidecar about every connection** (`authMethod: http`). Publishing needs the stream's key;
   watching needs a key, a guest key, a signed-in viewer's short-lived ticket, or a public stream (read only, never
   publish, never playback). The endpoint answers only MediaMTX.
@@ -91,7 +92,8 @@ viewer changing settings). An admin can change everything by design; the host an
   *Evidence:* `TestRequestFraming`, `TestUpstreamRequestIsRebuilt` (internal/proxy).
 - [x] **SSRF.** Every address MediaMTX can be told to connect to (a path's `source`, a forward's destination) is
   checked: loopback, link-local (cloud metadata), the stack's own subnet and reserved ranges are refused everywhere;
-  private LAN ranges are allowed for pulled sources (cameras live there) and refused for forwards. The MediaMTX
+  private LAN ranges are allowed, for pulled sources (cameras live there) and forwards (another server or recorder on
+  the network). The MediaMTX
   API, HLS, WebRTC and playback proxies have fixed upstreams, and the API proxy allows only the operations of the
   vendored spec. There are no remote instances in this release.
   *Evidence:* `TestSources`, `TestForward`, `FuzzCheckURL` (internal/netguard), `TestTableCoversVendoredSpec`,
@@ -200,6 +202,10 @@ Decisions, and limits we accept, so you can judge them for your setup.
   (DNS rebinding), or an HTTP redirect or WHIP `Location` header that MediaMTX follows, can lead MediaMTX somewhere
   the check would refuse. Only admins set sources, stream owners set forwards, and everything inside
   the stack authenticates every request, so nothing there trusts a connection for its source address alone.
+- **Forwards may go to the local network.** A stream's owner can forward it to any address MediaMTX can reach,
+  private LAN addresses included (another server or a recorder next door), never to the server itself, the stack's
+  own network or cloud metadata services. If your LAN holds services that must not receive a stream, give streamer
+  accounts only to people you trust with that.
 - **Plain HTTP** (a `PUBLIC_URL` with `http://`, for a LAN) has no `Secure` cookie and no passkeys. Use HTTPS on
   anything reachable from the internet.
 - **Stream protocols carry their own risks.** RTMP, RTSP and SRT without encryption send stream keys in clear; use
