@@ -16,6 +16,10 @@
 #   --help
 set -euo pipefail
 
+# Everything is in main, called on the last line: bash reads a piped script (curl ... | bash) as it runs it, so a
+# command reading standard input would otherwise swallow the rest of the script. Docker commands also get </dev/null.
+main() {
+
 REPO=greatmastix/MediaMTXUI
 DIR=/opt/mediamtx-ui
 MODE="" DOMAIN="" EMAIL="" STAGING="" LAN="" VERSION="" YES=""
@@ -118,9 +122,9 @@ need_pkg() { # need_pkg command package
   command -v "$1" >/dev/null && return
   info "Installing $2..."
   if command -v apt-get >/dev/null; then
-    DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$2" >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get update -qq </dev/null && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$2" </dev/null >/dev/null 2>&1
   elif command -v dnf >/dev/null; then
-    dnf install -y -q "$2" >/dev/null
+    dnf install -y -q "$2" </dev/null >/dev/null
   else
     die "please install $2 first."
   fi
@@ -137,7 +141,7 @@ else
   fi
   info "Installing Docker with Docker's install script (get.docker.com). This takes a minute or two."
   curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
-  sh /tmp/get-docker.sh >/tmp/get-docker.log 2>&1 || die "Docker's install script failed; its output is in /tmp/get-docker.log."
+  sh /tmp/get-docker.sh </dev/null >/tmp/get-docker.log 2>&1 || die "Docker's install script failed; its output is in /tmp/get-docker.log."
   rm -f /tmp/get-docker.sh
   docker compose version >/dev/null 2>&1 || die "Docker is installed, but docker compose does not work; see /tmp/get-docker.log."
   ok "Docker installed"
@@ -163,6 +167,16 @@ fetch() { # fetch release-file destination
   mv "$2.new" "$2"
 }
 
+# start_stack pulls the images and starts the stack quietly, waiting until it is healthy; on a failure it shows the end
+# of what Docker said.
+start_stack() {
+  local log=/tmp/mediamtx-ui-install.log
+  if ! { docker compose pull && docker compose up -d --wait --wait-timeout 180; } </dev/null >"$log" 2>&1; then
+    tail -n 20 "$log" >&2
+    die "the stack did not come up (Docker's whole output: $log; more in 'docker compose logs', run in $DIR)."
+  fi
+}
+
 # --- 4. Upgrade an existing install --------------------------------------------------------------------------------
 
 if [[ -f $DIR/.env && -f $DIR/compose.yaml ]]; then
@@ -175,8 +189,7 @@ if [[ -f $DIR/.env && -f $DIR/compose.yaml ]]; then
   done
   ok "Downloaded the release's compose files (your .env is kept)"
   info "Downloading the images and restarting..."
-  docker compose pull -q
-  docker compose up -d --wait --wait-timeout 180 >/dev/null || die "the stack did not come up; docker compose logs (in $DIR) says why."
+  start_stack
   ok "Upgraded and running"
   info "Back up first next time: Backups page, \"Back up now\". Old images: docker image prune"
   exit 0
@@ -278,8 +291,7 @@ ok "compose.yaml and .env written"
 # --- 7. Start ------------------------------------------------------------------------------------------------------
 
 info "Downloading the images and starting (the first time takes a minute or two)..."
-docker compose pull -q
-docker compose up -d --wait --wait-timeout 180 >/dev/null || die "the stack did not come up; run 'docker compose logs' in $DIR to see why."
+start_stack
 ok "Running"
 
 if [[ $MODE == public ]]; then
@@ -303,7 +315,7 @@ if [[ $MODE == public ]]; then
   fi
 fi
 
-TOKEN=$(docker compose exec -T sidecar /mtxui setup-token 2>/dev/null || true)
+TOKEN=$(docker compose exec -T sidecar /mtxui setup-token </dev/null 2>/dev/null || true)
 
 # docker without sudo, for the person who ran this (the docker group is as powerful as root).
 if [[ -n ${SUDO_USER:-} && $SUDO_USER != root ]] && ! id -nG "$SUDO_USER" | grep -qw docker; then
@@ -321,3 +333,6 @@ if [[ $MODE == public ]]; then
   info "8189/udp WebRTC (watching in browsers)."
 fi
 info "Upgrade later by running this installer again. Docs: https://github.com/$REPO/tree/main/docs"
+}
+
+main "$@"

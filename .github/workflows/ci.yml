@@ -56,12 +56,14 @@ jobs:
       - name: Install with scripts/install.sh
         run: |
           mkdir dist && cp compose.yaml deploy/compose.lan.yaml dist/ && cp .env.example dist/env.example
-          sudo MTXUI_INSTALL_BASE="file://$PWD/dist" scripts/install.sh --local 127.0.0.1 --yes --dir /tmp/mtxui | tee install.log
+          # Piped into bash, as the README runs it (curl ... | sudo bash).
+          cat scripts/install.sh | sudo MTXUI_INSTALL_BASE="file://$PWD/dist" bash -s -- --local 127.0.0.1 --yes --dir /tmp/mtxui | tee install.log
           grep -q "Setup token: " install.log
           curl -fsS http://127.0.0.1:8080/api/v1/health
       - name: Run it again (the upgrade path)
         run: |
-          sudo MTXUI_INSTALL_BASE="file://$PWD/dist" scripts/install.sh --yes --dir /tmp/mtxui
+          cat scripts/install.sh | sudo MTXUI_INSTALL_BASE="file://$PWD/dist" bash -s -- --yes --dir /tmp/mtxui | tee upgrade.log
+          grep -q "Upgraded and running" upgrade.log
           curl -fsS http://127.0.0.1:8080/api/v1/health
       - name: Logs
         if: failure()
