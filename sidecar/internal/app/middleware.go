@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"regexp"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -129,12 +130,18 @@ func (s *Server) watchProxy(next http.Handler) http.Handler {
 			s.mismatch.scheme = now
 		}
 		if !sameHost(info.Host, s.d.Settings.PublicURL.Host, s.d.Settings.PublicURL.Scheme) {
-			s.mismatch.host, s.mismatch.hostSeen = now, info.Host
+			s.mismatch.host, s.mismatch.hostSeen = now, ""
+			if reHost.MatchString(info.Host) {
+				s.mismatch.hostSeen = info.Host
+			}
 		}
 		s.mismatch.mu.Unlock()
 		next.ServeHTTP(w, r)
 	})
 }
+
+// reHost is a host[:port] the warning may show: a DNS name or an address, nothing else a client could put in Host.
+var reHost = regexp.MustCompile(`^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252})|\[[0-9A-Fa-f:.]{2,45}\])(?::[0-9]{1,5})?$`)
 
 // sameHost compares two host[:port] values the way a browser means them: case-insensitive, with the scheme's
 // default port the same as none ("host:443" is a valid way to name an https host).
@@ -155,8 +162,12 @@ func (s *Server) mismatchWarnings(now time.Time) []probe.Warning {
 			"plain http. Check that the reverse proxy sends X-Forwarded-Proto and that it is listed in MTXUI_TRUSTED_PROXIES."})
 	}
 	if !s.mismatch.host.IsZero() && now.Sub(s.mismatch.host) < mismatchMemory {
-		out = append(out, probe.Warning{Code: "proxy_host", Message: fmt.Sprintf("Requests arrive for host %q, but "+
-			"PUBLIC_URL is %s. Sign-in cookies and origin checks follow PUBLIC_URL.", s.mismatch.hostSeen, s.d.Settings.Origin())})
+		seen := "another host"
+		if s.mismatch.hostSeen != "" {
+			seen = fmt.Sprintf("host %q", s.mismatch.hostSeen)
+		}
+		out = append(out, probe.Warning{Code: "proxy_host", Message: fmt.Sprintf("Requests arrive for %s, but "+
+			"PUBLIC_URL is %s. Sign-in cookies and origin checks follow PUBLIC_URL.", seen, s.d.Settings.Origin())})
 	}
 	return out
 }

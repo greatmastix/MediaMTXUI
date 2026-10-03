@@ -71,6 +71,7 @@ type Lockout struct {
 	duration  time.Duration
 	entries   map[string]*lockEntry
 	now       func() time.Time
+	swept     time.Time // the last full sweep: at most one a second
 }
 
 type lockEntry struct {
@@ -114,11 +115,12 @@ func (l *Lockout) Begin(key string) (*Attempt, time.Duration) {
 	now := l.now()
 	e, ok := l.entries[key]
 	if !ok {
-		if len(l.entries) >= maxKeys {
+		if len(l.entries) >= maxKeys && now.Sub(l.swept) > time.Second {
 			l.sweep(now)
-			if len(l.entries) >= maxKeys {
-				return nil, time.Minute
-			}
+			l.swept = now
+		}
+		if len(l.entries) >= maxKeys {
+			return nil, time.Minute
 		}
 		e = &lockEntry{}
 		l.entries[key] = e
@@ -209,8 +211,12 @@ func (l *Lockout) failLocked(key string) bool {
 	now := l.now()
 	e, ok := l.entries[key]
 	if !ok {
-		if len(l.entries) >= maxKeys {
+		if len(l.entries) >= maxKeys && now.Sub(l.swept) > time.Second {
 			l.sweep(now)
+			l.swept = now
+		}
+		if len(l.entries) >= maxKeys {
+			return false // full of live entries: a new key is not tracked (the bound holds; the rate limits still apply)
 		}
 		e = &lockEntry{}
 		l.entries[key] = e

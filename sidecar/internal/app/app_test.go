@@ -550,6 +550,13 @@ func TestProxyMismatchWarnings(t *testing.T) {
 	if !slices.Equal(codes, []string{"proxy_host", "proxy_scheme"}) {
 		t.Errorf("warnings %v", codes)
 	}
+	// The warning names only something that looks like a host; other text in the header stays out of it.
+	h.do("GET", "/", nil, header("X-Forwarded-Host", "Your server is hacked, call 555-0100"))
+	for _, w := range decode(h.do("GET", "/api/v1/status", nil))["warnings"].([]any) {
+		if m := w.(map[string]any); m["code"] == "proxy_host" && !strings.HasPrefix(m["message"].(string), "Requests arrive for another host,") {
+			t.Errorf("proxy_host: %s", m["message"])
+		}
+	}
 }
 
 func TestInternalListener(t *testing.T) {

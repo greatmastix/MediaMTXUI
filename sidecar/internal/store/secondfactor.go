@@ -147,7 +147,6 @@ func scanPasskey(row scanner) (Passkey, error) {
 	return p, err
 }
 
-// AddPasskey stores a new passkey.
 // ErrLimit is returned when a user already has as many of something as allowed.
 var ErrLimit = errors.New("limit reached")
 

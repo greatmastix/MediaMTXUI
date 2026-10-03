@@ -63,7 +63,7 @@ func (s *Store) pruneSnapshots(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck // after Commit, a no-op
-	var cut int64 // the oldest version kept
+	var cut int64       // the oldest version kept
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM config_snapshots ORDER BY id DESC LIMIT 1 OFFSET ?`, keepSnapshots-1).Scan(&cut); err != nil {
 		return err
 	}

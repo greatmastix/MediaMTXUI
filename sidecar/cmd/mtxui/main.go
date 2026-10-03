@@ -225,6 +225,12 @@ func start(ctx context.Context, cfg *settings.Settings, log *slog.Logger, logHub
 		log.Info(outcome.Message)
 	}
 
+	if changed, err := c.writer.SyncTrustedProxies(ctx, cfg.StackSubnet); err != nil {
+		log.Warn("setting MediaMTX's trusted proxies to the stack subnet", "subnet", cfg.StackSubnet, "err", err)
+	} else if changed {
+		log.Info("MediaMTX's trusted proxies now follow the stack subnet", "subnet", cfg.StackSubnet)
+	}
+
 	principal, err := mtxauth.NewPrincipal()
 	if err != nil {
 		return err

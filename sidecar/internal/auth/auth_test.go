@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -380,5 +381,16 @@ func TestHasherBusy(t *testing.T) {
 	cancel()
 	for range maxWaiting {
 		<-errs
+	}
+}
+
+// The lockout table stays within maxKeys however many keys fail, and sweeps at most once a second while full.
+func TestLockoutBound(t *testing.T) {
+	l := NewLockout(3, 15*time.Minute)
+	for i := range maxKeys + 500 {
+		l.Fail(fmt.Sprint("addr-", i))
+	}
+	if n := len(l.entries); n > maxKeys {
+		t.Fatalf("%d entries, bound %d", n, maxKeys)
 	}
 }
