@@ -59,11 +59,25 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("migrations: %w", err)
 	}
+	// goose applies what is missing and says nothing about versions it does not know: an older release started on a
+	// newer release's database (compose.yaml put back after an upgrade) would run on a schema it was not built for.
+	cur, err := p.GetDBVersion(ctx)
+	if err != nil {
+		return fmt.Errorf("migrations: %w", err)
+	}
+	if srcs := p.ListSources(); len(srcs) > 0 && cur > srcs[len(srcs)-1].Version {
+		return fmt.Errorf("%w: the database has schema version %d, this release knows up to %d; run the newer "+
+			"release again, or restore a backup made with this one (docs/upgrading.md)", ErrNewerDatabase, cur,
+			srcs[len(srcs)-1].Version)
+	}
 	if _, err := p.Up(ctx); err != nil {
 		return fmt.Errorf("migrations: %w", err)
 	}
 	return nil
 }
+
+// ErrNewerDatabase is returned by Open for a database a newer release has migrated.
+var ErrNewerDatabase = errors.New("the database is from a newer release")
 
 // Close closes the database.
 func (s *Store) Close() error { return s.db.Close() }

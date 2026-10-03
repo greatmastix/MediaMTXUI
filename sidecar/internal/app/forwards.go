@@ -331,8 +331,8 @@ func (s *Server) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid", err.Error())
 		return
 	}
-	u, _ := url.Parse(dest.Dest)
-	if err := s.d.NetGuard.CheckHost(ctx, u.Hostname()); err != nil {
+	// The same check as a forward set in Configuration: other platforms on the internet, never a private network.
+	if err := s.d.NetGuard.CheckForward(ctx, dest.Dest); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid", "The server cannot be used: "+err.Error()+".")
 		return
 	}

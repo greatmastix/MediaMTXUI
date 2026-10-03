@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -502,5 +503,22 @@ func TestEncoderAddresses(t *testing.T) {
 	}
 	if left, _ := s.EncoderAddresses(ctx, t0); len(left) != 0 {
 		t.Errorf("addresses outlived their stream: %+v", left)
+	}
+}
+
+// A database a newer release migrated is refused, not run on a schema this release was not built for.
+func TestNewerDatabaseIsRefused(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "db")
+	st, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.ExecContext(ctx, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (9999, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+	if _, err := Open(ctx, path); !errors.Is(err, ErrNewerDatabase) || !strings.Contains(err.Error(), "9999") {
+		t.Fatalf("a newer database: %v", err)
 	}
 }
