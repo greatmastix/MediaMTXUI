@@ -91,21 +91,21 @@ done
 # Questions read the terminal, also when the script itself arrives through a pipe (curl ... | sudo bash).
 TTY=""
 if [[ -z $YES ]] && { exec 3</dev/tty; } 2>/dev/null; then TTY=1; fi
-ask() { # ask VAR "question" [default]
-  local var=$1 q=$2 def=${3:-} answer
+ask() { # ask VAR "question" [default]: VAR is the caller's; the locals here have names no caller uses
+  local _var=$1 _q=$2 _def=${3:-} _reply
   if [[ -z $TTY ]]; then
-    [[ -n $def ]] || die "$q: no answer (run it in a terminal, or pass the option: see --help)"
-    printf -v "$var" '%s' "$def"
+    [[ -n $_def ]] || die "$_q: no answer (run it in a terminal, or pass the option: see --help)"
+    printf -v "$_var" '%s' "$_def"
     return
   fi
-  if [[ -n $def ]]; then printf '  %s [%s]: ' "$q" "$def"; else printf '  %s: ' "$q"; fi
-  IFS= read -r answer <&3 || true
-  printf -v "$var" '%s' "${answer:-$def}"
+  if [[ -n $_def ]]; then printf '  %s [%s]: ' "$_q" "$_def"; else printf '  %s: ' "$_q"; fi
+  IFS= read -r _reply <&3 || true
+  printf -v "$_var" '%s' "${_reply:-$_def}"
 }
 yesno() { # yesno "question" default(y|n)
-  local answer
-  ask answer "$1 (y/n)" "$2"
-  [[ $answer == [yY]* ]]
+  local _yn
+  ask _yn "$1 (y/n)" "$2"
+  [[ $_yn == [yY]* ]]
 }
 
 # --- 1. The machine ------------------------------------------------------------------------------------------------
