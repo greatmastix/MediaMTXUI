@@ -107,6 +107,14 @@ export function exportURL(
   return `/api/v1/recordings/export?${q.toString()}`
 }
 
+/** A recording's frame at a moment, for the browser to decode: the first picture of a short MP4 (edge first), or its
+ * last picture, just before the moment (edge last). */
+export function frameURL(path: string, at: Date, edge: 'first' | 'last', seconds?: number) {
+  const q = new URLSearchParams({ path, at: at.toISOString(), edge })
+  if (seconds !== undefined) q.set('seconds', String(seconds))
+  return `/api/v1/recordings/frame?${q.toString()}`
+}
+
 export const deleteSegments = (path: string, starts: string[]) =>
   request(
     'POST',

@@ -98,7 +98,7 @@ describe('recording', () => {
     )
   })
 
-  it('shows the first and the last recorded frame of the selection, one after the other', async () => {
+  it('shows the first and the last recorded frame of the selection, both at once', async () => {
     withRecording(true)
     renderApp('/recordings/cam1')
     const selection = await screen.findByRole('region', { name: 'Selection' })
@@ -109,25 +109,45 @@ describe('recording', () => {
     fireEvent.change(within(selection).getByLabelText('Length (seconds)'), {
       target: { value: '3600' },
     })
-    const first = await within(selection).findByLabelText('First frame of the selection')
-    const url = (v: HTMLElement) => new URL(v.getAttribute('src') ?? '', 'http://x').searchParams
-    expect(url(first).get('start')).toBe(start.toISOString())
-    expect(url(first).get('duration')).toBe('1.000')
-    expect(url(first).get('format')).toBe('mp4')
-    expect(url(first).get('download')).toBeNull()
-    // The last frame waits for the first: exports share a few slots.
-    expect(
-      within(selection).queryByLabelText('Last frame of the selection'),
-    ).not.toBeInTheDocument()
-    fireEvent.seeked(first)
+    const url = (v: HTMLElement) => new URL(v.getAttribute('src') ?? '', 'http://x')
+    const first = url(await within(selection).findByLabelText('First frame of the selection'))
+    const last = url(await within(selection).findByLabelText('Last frame of the selection'))
+    expect(first.pathname).toBe('/api/v1/recordings/frame')
+    expect(first.searchParams.get('at')).toBe(start.toISOString())
+    expect(first.searchParams.get('edge')).toBe('first')
+    expect(last.searchParams.get('at')).toBe(new Date(start.getTime() + 1800_000).toISOString())
+    expect(last.searchParams.get('edge')).toBe('last')
+    fireEvent.seeked(within(selection).getByLabelText('First frame of the selection'))
     expect(within(selection).getByTestId('first-frame')).toHaveAttribute('data-state', 'ready')
-    const last = await within(selection).findByLabelText('Last frame of the selection')
-    expect(url(last).get('start')).toBe(new Date(start.getTime() + 1800_000 - 1000).toISOString())
     expect(within(selection).getByTestId('recording-frames')).toHaveTextContent(
       'First frame · 08:00:00',
     )
     expect(within(selection).getByTestId('recording-frames')).toHaveTextContent(
       'Last frame · 08:30:00',
     )
+  })
+
+  it('moves the ends of the selection with its handles, by the second', async () => {
+    withRecording(true)
+    renderApp('/recordings/cam1')
+    const selection = await screen.findByRole('region', { name: 'Selection' })
+    fireEvent.change(within(selection).getByLabelText('From'), {
+      target: { value: '2026-10-03T09:00:00' },
+    })
+    fireEvent.change(within(selection).getByLabelText('Length (seconds)'), {
+      target: { value: '60' },
+    })
+    const startHandle = await screen.findByRole('slider', { name: 'Selection start' })
+    const endHandle = screen.getByRole('slider', { name: 'Selection end' })
+    fireEvent.keyDown(startHandle, { key: 'ArrowRight' })
+    fireEvent.keyDown(endHandle, { key: 'ArrowLeft', shiftKey: true })
+    fireEvent.keyDown(endHandle, { key: 'PageUp' })
+    // 09:00:01 to 09:01:50: a second later, ten seconds earlier, then a minute later.
+    expect(within(selection).getByLabelText('From')).toHaveValue('2026-10-03T09:00:01')
+    expect(within(selection).getByTestId('selection-summary')).toHaveTextContent('1m 49s')
+    // The start never passes the end.
+    fireEvent.keyDown(startHandle, { key: 'PageUp' })
+    fireEvent.keyDown(startHandle, { key: 'PageUp' })
+    expect(within(selection).getByTestId('selection-summary')).toHaveTextContent('1s')
   })
 })

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { ChevronLeft, ChevronRight, Download, Play, Trash2 } from 'lucide-react'
+import { cn } from 'cn'
 import { useRef, useState } from 'react'
 
 import { ApiError, refusal } from '@/api/client'
@@ -29,6 +30,7 @@ const zooms = [
   { label: '6 h', ms: 6 * 3600_000 },
   { label: '1 h', ms: 3600_000 },
   { label: '10 min', ms: 600_000 },
+  { label: '1 min', ms: 60_000 },
 ]
 
 // Tick spacing for each zoom: a label every so often.
@@ -39,7 +41,9 @@ const tickEvery = (span: number) =>
       ? 3600_000
       : span > 600_000
         ? 600_000
-        : 60_000
+        : span > 60_000
+          ? 60_000
+          : 10_000
 
 const W = 1000 // the timeline's width in SVG units
 
@@ -144,6 +148,19 @@ export function RecordingPage({ name }: { name: string }) {
         : viewStart + span / 2
     setView({ start: centre - ms / 2, span: ms })
   }
+  // A handle moves one end of the selection; the selection stays at least a second long.
+  const moveEdge = (which: 'start' | 'end', t: number) => {
+    if (!sel) return
+    const s0 = sel.start.getTime()
+    const e0 = sel.end.getTime()
+    setSel(
+      which === 'start'
+        ? { start: new Date(Math.min(t, e0 - 1000)), end: sel.end }
+        : { start: sel.start, end: new Date(Math.max(t, s0 + 1000)) },
+    )
+    setPlaying(null)
+    setConfirm(false)
+  }
   const select = (a: number, b: number) => {
     const [s, e] = a <= b ? [a, b] : [b, a]
     setSel({ start: new Date(s), end: new Date(Math.max(e, s + 1000)) })
@@ -225,94 +242,125 @@ export function RecordingPage({ name }: { name: string }) {
             </Button>
           )}
         </div>
-        <svg
-          ref={svg}
-          viewBox={`0 0 ${String(W)} 64`}
-          preserveAspectRatio="none"
-          className="h-20 w-full cursor-crosshair touch-none rounded-lg border bg-card select-none"
-          data-testid="timeline"
-          aria-label={`${String(spanList.length)} recorded stretches in this window`}
-          role="img"
-          onPointerDown={(e) => {
-            e.currentTarget.setPointerCapture(e.pointerId)
-            drag.current = { from: timeAt(e.clientX), moved: false }
-          }}
-          onPointerMove={(e) => {
-            const d = drag.current
-            if (!d) return
-            const t = timeAt(e.clientX)
-            if (Math.abs(x(t) - x(d.from)) > 3) d.moved = true
-            if (d.moved) select(d.from, t)
-          }}
-          onPointerUp={(e) => {
-            const d = drag.current
-            drag.current = null
-            if (!d) return
-            if (d.moved) {
-              select(d.from, timeAt(e.clientX))
-            } else {
-              const sp = spanList.find((s) => d.from >= s.s && d.from < s.e)
-              select(d.from, Math.min(d.from + 60_000, sp?.e ?? d.from + 60_000))
-            }
-          }}
-          onDoubleClick={(e) => {
-            const t = timeAt(e.clientX)
-            const sp = spanList.find((s) => t >= s.s && t < s.e)
-            if (sp) select(sp.s, sp.e)
-          }}
-        >
-          {ticks.map((t) => (
-            <g key={t}>
-              <line x1={x(t)} x2={x(t)} y1={0} y2={44} className="stroke-border" strokeWidth={1} />
-              <text x={x(t) + 3} y={58} className="fill-muted-foreground text-[10px]">
-                {new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </text>
-            </g>
-          ))}
-          {spanList.map((s) => (
-            <rect
-              key={s.start}
-              x={Math.max(0, x(s.s))}
-              width={Math.max(1, Math.min(W, x(s.e)) - Math.max(0, x(s.s)))}
-              y={10}
-              height={30}
-              className="fill-signal/70"
-              data-testid="timeline-span"
-            />
-          ))}
-          {(segments.data ?? []).map((g) => {
-            const t = Date.parse(g.start)
-            if (t < viewStart || t >= viewEnd) return null
-            return (
-              <line
-                key={g.start}
-                x1={x(t)}
-                x2={x(t)}
-                y1={6}
-                y2={10}
-                className="stroke-signal"
-                strokeWidth={1}
+        <div className="relative">
+          <svg
+            ref={svg}
+            viewBox={`0 0 ${String(W)} 64`}
+            preserveAspectRatio="none"
+            className="h-20 w-full cursor-crosshair touch-none rounded-lg border bg-card select-none"
+            data-testid="timeline"
+            aria-label={`${String(spanList.length)} recorded stretches in this window`}
+            role="img"
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId)
+              drag.current = { from: timeAt(e.clientX), moved: false }
+            }}
+            onPointerMove={(e) => {
+              const d = drag.current
+              if (!d) return
+              const t = timeAt(e.clientX)
+              if (Math.abs(x(t) - x(d.from)) > 3) d.moved = true
+              if (d.moved) select(d.from, t)
+            }}
+            onPointerUp={(e) => {
+              const d = drag.current
+              drag.current = null
+              if (!d) return
+              if (d.moved) {
+                select(d.from, timeAt(e.clientX))
+              } else {
+                const sp = spanList.find((s) => d.from >= s.s && d.from < s.e)
+                select(d.from, Math.min(d.from + 60_000, sp?.e ?? d.from + 60_000))
+              }
+            }}
+            onDoubleClick={(e) => {
+              const t = timeAt(e.clientX)
+              const sp = spanList.find((s) => t >= s.s && t < s.e)
+              if (sp) select(sp.s, sp.e)
+            }}
+          >
+            {ticks.map((t) => (
+              <g key={t}>
+                <line
+                  x1={x(t)}
+                  x2={x(t)}
+                  y1={0}
+                  y2={44}
+                  className="stroke-border"
+                  strokeWidth={1}
+                />
+                <text x={x(t) + 3} y={58} className="fill-muted-foreground text-[10px]">
+                  {new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </text>
+              </g>
+            ))}
+            {spanList.map((s) => (
+              <rect
+                key={s.start}
+                x={Math.max(0, x(s.s))}
+                width={Math.max(1, Math.min(W, x(s.e)) - Math.max(0, x(s.s)))}
+                y={10}
+                height={30}
+                className="fill-signal/70"
+                data-testid="timeline-span"
               />
-            )
-          })}
-          {sel && (
-            <rect
-              x={Math.max(0, x(sel.start.getTime()))}
-              width={Math.max(
-                1,
-                Math.min(W, x(sel.end.getTime())) - Math.max(0, x(sel.start.getTime())),
-              )}
-              y={2}
-              height={42}
-              className="fill-foreground/15 stroke-foreground"
-              strokeWidth={1}
-              data-testid="timeline-selection"
-            />
-          )}
-        </svg>
+            ))}
+            {(segments.data ?? []).map((g) => {
+              const t = Date.parse(g.start)
+              if (t < viewStart || t >= viewEnd) return null
+              return (
+                <line
+                  key={g.start}
+                  x1={x(t)}
+                  x2={x(t)}
+                  y1={6}
+                  y2={10}
+                  className="stroke-signal"
+                  strokeWidth={1}
+                />
+              )
+            })}
+            {sel && (
+              <rect
+                x={Math.max(0, x(sel.start.getTime()))}
+                width={Math.max(
+                  1,
+                  Math.min(W, x(sel.end.getTime())) - Math.max(0, x(sel.start.getTime())),
+                )}
+                y={2}
+                height={42}
+                className="fill-foreground/15 stroke-foreground"
+                strokeWidth={1}
+                data-testid="timeline-selection"
+              />
+            )}
+          </svg>
+          {sel &&
+            (['start', 'end'] as const).map((which) => {
+              const t = which === 'start' ? sel.start.getTime() : sel.end.getTime()
+              if (t < viewStart || t > viewEnd) return null
+              return (
+                <SelectionHandle
+                  key={which}
+                  which={which}
+                  at={t}
+                  left={((t - viewStart) / span) * 100}
+                  range={[viewStart, viewEnd]}
+                  onDrag={(at) => {
+                    moveEdge(which, Math.min(viewEnd, Math.max(viewStart, at)))
+                  }}
+                  onStep={(by) => {
+                    moveEdge(which, t + by)
+                  }}
+                />
+              )
+            })}
+        </div>
         <p className="text-xs text-muted-foreground">
           Drag to select a stretch, click to select a minute, double-click a recorded stretch to
-          select all of it. Gaps are times nothing was recorded.
+          select all of it. Drag the handles at its ends (or focus one and use the arrow keys: a
+          second, ten with Shift, a minute with Page Up and Down) to set it exactly. Gaps are times
+          nothing was recorded.
           {spans.data && spanList.length === 0 && ' Nothing was recorded in this window.'}
         </p>
       </section>
@@ -479,4 +527,88 @@ export function RecordingPage({ name }: { name: string }) {
       </section>
     </div>
   )
+}
+
+/** One end of the selection, over the timeline: drag it, or focus it and use the arrow keys (a second, ten with
+ * Shift) and Page Up/Down (a minute). Pointer capture keeps a drag on it however fast the pointer moves. */
+function SelectionHandle({
+  which,
+  at,
+  left,
+  range,
+  onDrag,
+  onStep,
+}: {
+  which: 'start' | 'end'
+  at: number
+  left: number
+  range: [number, number]
+  onDrag: (at: number) => void
+  onStep: (ms: number) => void
+}) {
+  return (
+    <div
+      role="slider"
+      tabIndex={0}
+      aria-label={which === 'start' ? 'Selection start' : 'Selection end'}
+      aria-valuemin={range[0]}
+      aria-valuemax={range[1]}
+      aria-valuenow={at}
+      aria-valuetext={`${day(new Date(at))} ${clock(new Date(at))}`}
+      data-testid={`handle-${which}`}
+      // Positioned through the style property (CSSOM), which the CSP allows, unlike a style attribute.
+      style={{ left: `${String(left)}%` }}
+      // The grab area reaches outward from its edge (the start's left, the end's right), so the two never overlap, however
+      // short the selection; the grip sits on the edge itself.
+      className={cn(
+        'group absolute top-0 bottom-5 flex w-5 cursor-ew-resize touch-none outline-none',
+        which === 'start' ? '-translate-x-full justify-end' : 'justify-start',
+      )}
+      onPointerDown={(e) => {
+        e.stopPropagation()
+        e.currentTarget.setPointerCapture(e.pointerId)
+      }}
+      onPointerMove={(e) => {
+        // The time under the pointer, across the timeline this handle sits on (its parent, as wide as the timeline).
+        const box = e.currentTarget.parentElement?.getBoundingClientRect()
+        if (!box || box.width === 0 || !e.currentTarget.hasPointerCapture(e.pointerId)) return
+        onDrag(range[0] + ((e.clientX - box.left) / box.width) * (range[1] - range[0]))
+      }}
+      onKeyDown={(e) => {
+        const by = handleStep(e.key, e.shiftKey)
+        if (by === 0) return
+        e.preventDefault()
+        onStep(by)
+      }}
+    >
+      <span className="mt-0.5 h-[calc(100%-0.25rem)] w-1.5 rounded-full bg-foreground shadow ring-2 ring-background group-focus-visible:ring-ring" />
+      <span
+        className={cn(
+          'pointer-events-none absolute -top-6 rounded bg-foreground px-1.5 py-0.5 text-[10px] whitespace-nowrap text-background tabular-nums opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-active:opacity-100',
+          which === 'start' ? 'right-0' : 'left-0',
+        )}
+      >
+        {clock(new Date(at))}
+      </span>
+    </div>
+  )
+}
+
+/** How far a key moves a handle: a second (ten with Shift) with the arrows, a minute with Page Up/Down; 0 for others. */
+function handleStep(key: string, shift: boolean) {
+  const step = shift ? 10_000 : 1000
+  switch (key) {
+    case 'ArrowLeft':
+    case 'ArrowDown':
+      return -step
+    case 'ArrowRight':
+    case 'ArrowUp':
+      return step
+    case 'PageDown':
+      return -60_000
+    case 'PageUp':
+      return 60_000
+    default:
+      return 0
+  }
 }

@@ -40,18 +40,26 @@ The timeline shows what was recorded as bars; gaps are times nothing was recorde
 where each segment starts.
 
 - **Earlier** and **Later** (the arrow buttons) move the window by half its width; **24 h**, **6 h**, **1 h** and
-  **10 min** zoom; **Latest** jumps to the newest recording.
+  **10 min** and **1 min** zoom; **Latest** jumps to the newest recording.
 - **Drag** across the timeline to select a stretch, **click** to select a minute, or **double-click** a bar to select
   all of that recorded stretch.
 - Or type the start into **From** and the **Length (seconds)**.
+
+Then set it exactly with the **handles** at its two ends: drag them, or click one and use the arrow keys (a second
+per press, ten with Shift, a minute with Page Up and Page Down). Hovering over a handle shows its time. Zoom in to
+**1 min** to place them to the second with the mouse.
 
 Below the timeline the page sums up the selection: date, start and end time, length, and how many segments start in
 it.
 
 Under the summary, the selection's **first frame** and **last frame** appear, with their times, so you can see where
 an export will begin and end before you play or download it. Where the selection begins or ends in a gap, they show
-where the recording itself begins or ends. Each comes from a one-second export that your browser decodes, so they
-take a moment, and appear a little after you stop dragging.
+where the recording itself begins or ends. Each is a tenth of a second of video that your browser decodes; moving one
+handle reloads only its own frame, and a frame you have seen before comes back at once.
+
+How fast they appear depends mostly on your encoder's **keyframe interval**: each frame needs the video since the
+keyframe before it. With OBS's 2-second keyframe interval (Settings → Output → Keyframe Interval) a frame is a few
+hundred KB; with 5 or 10 seconds it is several times that.
 
 ## Playing and downloading
 

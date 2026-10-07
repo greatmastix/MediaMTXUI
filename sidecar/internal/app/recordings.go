@@ -52,10 +52,20 @@ type recordingsState struct {
 	err       string
 	shortfall string        // why the budget loop deleted nothing although recordings must shrink, or ""
 	exports   chan struct{} // one token per running export
+	frames    chan struct{} // one token per frame being served (recordingFrame)
 }
 
 // exportSlack is how much longer than twice its range an export may take.
 var exportSlack = time.Minute
+
+func (s *Server) frameSlots() chan struct{} {
+	s.rec.mu.Lock()
+	defer s.rec.mu.Unlock()
+	if s.rec.frames == nil {
+		s.rec.frames = make(chan struct{}, frameConcurrency)
+	}
+	return s.rec.frames
+}
 
 func (s *Server) recordingsRoot() string { return path.Join(s.d.Settings.DataDir, "recordings") }
 
@@ -394,10 +404,6 @@ func (s *Server) recordingExport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid", "The format is mp4 or fmp4.")
 		return
 	}
-	if s.d.Playback == nil {
-		writeError(w, http.StatusBadGateway, "mediamtx", "MediaMTX's playback server is not configured.")
-		return
-	}
 	slots := s.exportSlots()
 	select {
 	case slots <- struct{}{}:
@@ -413,24 +419,11 @@ func (s *Server) recordingExport(w http.ResponseWriter, r *http.Request) {
 	_ = http.NewResponseController(w).SetWriteDeadline(end)
 	ctx, cancel := context.WithDeadline(r.Context(), end)
 	defer cancel()
-	get := url.Values{
-		"path": {name}, "start": {start.UTC().Format(time.RFC3339Nano)},
-		"duration": {strconv.FormatFloat(secs, 'f', -1, 64)}, "format": {format},
-	}
-	resp, err := s.d.Playback.Open(ctx, "/get?"+get.Encode())
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "mediamtx", "MediaMTX's playback server does not answer.")
+	resp, ok := s.openPlayback(ctx, w, name, start, secs, format)
+	if !ok {
 		return
 	}
 	defer resp.Body.Close()
-	switch {
-	case resp.StatusCode == http.StatusNotFound:
-		writeError(w, http.StatusNotFound, "not_found", "Nothing was recorded in that range.")
-		return
-	case resp.StatusCode != http.StatusOK:
-		writeError(w, http.StatusBadGateway, "mediamtx", fmt.Sprintf("MediaMTX's playback server answered %d.", resp.StatusCode))
-		return
-	}
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Cache-Control", "no-store")
 	if q.Get("download") == "1" {
@@ -443,6 +436,108 @@ func (s *Server) recordingExport(w http.ResponseWriter, r *http.Request) {
 		// The cap is reached: end the response abruptly, so the client sees a broken download, not a whole one.
 		s.d.Log.Warn("recording export cut at the size cap", "path", name, "bytes", n)
 		panic(http.ErrAbortHandler)
+	}
+}
+
+// openPlayback asks MediaMTX's playback server for secs of name from start, in format, and answers the request itself
+// (false) when it cannot. The caller closes the body.
+func (s *Server) openPlayback(ctx context.Context, w http.ResponseWriter, name string, start time.Time, secs float64, format string) (*http.Response, bool) {
+	if s.d.Playback == nil {
+		writeError(w, http.StatusBadGateway, "mediamtx", "MediaMTX's playback server is not configured.")
+		return nil, false
+	}
+	get := url.Values{
+		"path": {name}, "start": {start.UTC().Format(time.RFC3339Nano)},
+		"duration": {strconv.FormatFloat(secs, 'f', -1, 64)}, "format": {format},
+	}
+	resp, err := s.d.Playback.Open(ctx, "/get?"+get.Encode())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "mediamtx", "MediaMTX's playback server does not answer.")
+		return nil, false
+	}
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		_ = resp.Body.Close()
+		writeError(w, http.StatusNotFound, "not_found", "Nothing was recorded in that range.")
+		return nil, false
+	case resp.StatusCode != http.StatusOK:
+		_ = resp.Body.Close()
+		writeError(w, http.StatusBadGateway, "mediamtx", fmt.Sprintf("MediaMTX's playback server answered %d.", resp.StatusCode))
+		return nil, false
+	}
+	return resp, true
+}
+
+// Frames: a recording's picture at a moment, for the recording page's first and last frame of a selection. The sidecar
+// cannot decode video, so it serves frameSeconds of MP4 for the browser to decode: MediaMTX starts it at the keyframe
+// before the asked time and stacks the frames up to that time at the start, so edge "first" gives the picture at "at"
+// first, and edge "last" (the tenth of a second before "at") the picture just before "at" last. Most of a frame's size
+// is those stacked frames: up to the encoder's keyframe interval of video. "seconds" asks for more than frameSeconds,
+// up to frameMaxSeconds: where a recording starts (audio comes first) or ends, a tenth of a second may hold no
+// picture, and the page asks again for more. Frames have frameConcurrency slots of their
+// own, so they neither wait for nor hold up exports; a moment more than frameFinal back is in a finished recording, so
+// the browser may keep its frame.
+const (
+	frameConcurrency = 4
+	frameSeconds     = 0.1
+	frameMaxSeconds  = 2.0
+	frameFinal       = 2 * time.Minute
+	frameTimeout     = 30 * time.Second
+)
+
+func (s *Server) recordingFrame(w http.ResponseWriter, r *http.Request) {
+	name, ok := s.readablePath(w, r)
+	if !ok {
+		return
+	}
+	at, ok := timeParam(w, r, "at", true)
+	if !ok {
+		return
+	}
+	secs := frameSeconds
+	if raw := r.URL.Query().Get("seconds"); raw != "" {
+		v, err := strconv.ParseFloat(raw, 64)
+		if err != nil || v < frameSeconds || v > frameMaxSeconds {
+			writeError(w, http.StatusBadRequest, "invalid", fmt.Sprintf("The seconds are %g to %g.", frameSeconds, frameMaxSeconds))
+			return
+		}
+		secs = v
+	}
+	start := at
+	switch r.URL.Query().Get("edge") {
+	case "first":
+	case "last":
+		start = at.Add(-time.Duration(secs * float64(time.Second)))
+	default:
+		writeError(w, http.StatusBadRequest, "invalid", "The edge is first or last.")
+		return
+	}
+	slots := s.frameSlots()
+	select {
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
+	default:
+		writeError(w, http.StatusTooManyRequests, "busy", "Too many frames are loading; try again in a moment.")
+		return
+	}
+	end := time.Now().Add(frameTimeout)
+	_ = http.NewResponseController(w).SetWriteDeadline(end)
+	ctx, cancel := context.WithDeadline(r.Context(), end)
+	defer cancel()
+	resp, ok := s.openPlayback(ctx, w, name, start, secs, "mp4")
+	if !ok {
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Content-Type", "video/mp4")
+	if time.Since(at) > frameFinal {
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+	} else {
+		w.Header().Set("Cache-Control", "no-store")
+	}
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.CopyN(w, resp.Body, s.d.Settings.ExportMaxBytes); err == nil {
+		panic(http.ErrAbortHandler) // as large as a whole export may be: not a frame
 	}
 }
 

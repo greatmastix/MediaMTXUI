@@ -90,6 +90,7 @@ func (s *Server) Public() http.Handler {
 		s.handle(api, http.MethodGet, "/v1/recordings/spans", Streamer, s.recordingSpans)
 		s.handle(api, http.MethodGet, "/v1/recordings/segments", Streamer, s.recordingSegments)
 		s.handle(api, http.MethodGet, "/v1/recordings/export", Streamer, s.recordingExport)
+		s.handle(api, http.MethodGet, "/v1/recordings/frame", Streamer, s.recordingFrame)
 		s.handle(api, http.MethodPost, "/v1/recordings/delete", Operator, s.recordingsDelete)
 		s.handle(api, http.MethodPost, "/v1/recordings/guard/release", Admin, s.recordingsGuardRelease)
 		s.handle(api, http.MethodGet, "/v1/layouts", Streamer, s.layoutsList)

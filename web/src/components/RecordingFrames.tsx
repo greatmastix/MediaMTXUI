@@ -1,79 +1,47 @@
 import { useEffect, useState } from 'react'
 
-import { exportURL } from '@/api/recordings'
+import { frameURL } from '@/api/recordings'
 
 // The first and the last frame of a selected stretch, so you see where an export begins and ends before you play or
-// download it. Each comes from a one-second export (MP4, which states its duration): MediaMTX starts an export at the
-// keyframe before the asked time and stacks the frames up to it at the start, so the clip's first picture is the one
-// at the asked time, and its last picture the one just before its end. The browser decodes them; the server cannot.
-// The second waits for the first: exports share a few slots (MTXUI_EXPORT_CONCURRENCY), and Play needs one.
+// download it. The server cannot decode video: each frame is a tenth of a second of MP4 (GET /v1/recordings/frame)
+// that the browser decodes and stops on. Most of its size is the frames since the keyframe before it, so an encoder's
+// keyframe interval decides how fast frames load. Each frame loads on its own once its moment holds still (a handle
+// being dragged reloads only its own frame), both at once; frames have server slots of their own, apart from Play's.
 
-const clipSeconds = 1
-const settleMs = 400 // a dragged selection changes many times: ask once it holds still
+const settleMs = 250
+const longerSeconds = 2
 
 const clock = (d: Date) =>
   d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
 export function RecordingFrames({ name, first, last }: { name: string; first: Date; last: Date }) {
-  const [settled, setSettled] = useState<{ first: number; last: number } | null>(null)
-  const f = first.getTime()
-  const l = last.getTime()
+  return (
+    <div className="grid max-w-2xl grid-cols-2 gap-3" data-testid="recording-frames">
+      <SettledFrame name={name} at={first.getTime()} edge="first" />
+      <SettledFrame name={name} at={last.getTime()} edge="last" />
+    </div>
+  )
+}
+
+function SettledFrame({ name, at, edge }: { name: string; at: number; edge: 'first' | 'last' }) {
+  const [settled, setSettled] = useState<number | null>(null)
   useEffect(() => {
     const t = setTimeout(() => {
-      setSettled({ first: f, last: l })
+      setSettled(at)
     }, settleMs)
     return () => {
       clearTimeout(t)
     }
-  }, [f, l])
-  // A new stretch starts both frames afresh; until it holds still, they wait.
-  const active = settled?.first === f && settled.last === l
+  }, [at])
+  const active = settled === at
   return (
-    <Frames
-      key={active ? `${String(f)}-${String(l)}` : 'waiting'}
-      name={name}
-      first={f}
-      last={l}
-      active={active}
+    <Frame
+      key={active ? `${name} ${String(at)}` : 'waiting'}
+      label={edge === 'first' ? 'First frame' : 'Last frame'}
+      at={at}
+      src={active ? (seconds) => frameURL(name, new Date(at), edge, seconds) : null}
+      end={edge === 'last'}
     />
-  )
-}
-
-function Frames({
-  name,
-  first,
-  last,
-  active,
-}: {
-  name: string
-  first: number
-  last: number
-  active: boolean
-}) {
-  const [firstDone, setFirstDone] = useState(false)
-  const seconds = Math.min(clipSeconds, Math.max(0.1, (last - first) / 1000))
-  return (
-    <div className="grid max-w-2xl grid-cols-2 gap-3" data-testid="recording-frames">
-      <Frame
-        label="First frame"
-        at={first}
-        src={active ? exportURL(name, new Date(first), seconds, 'mp4', false) : null}
-        end={false}
-        onDone={() => {
-          setFirstDone(true)
-        }}
-      />
-      <Frame
-        label="Last frame"
-        at={last}
-        src={
-          active && firstDone
-            ? exportURL(name, new Date(last - seconds * 1000), seconds, 'mp4', false)
-            : null
-        }
-        end
-      />
-    </div>
   )
 }
 
@@ -82,25 +50,28 @@ function Frame({
   at,
   src,
   end,
-  onDone,
 }: {
   label: string
   at: number
-  src: string | null
+  src: ((seconds?: number) => string) | null
   end: boolean
-  onDone?: () => void
 }) {
   const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading')
+  const [why, setWhy] = useState('') // the browser's media error, for whoever looks into a frame that stays black
+  // A tenth of a second first; where that holds no picture (a recording's start, where audio comes first, or its end),
+  // two seconds, once.
+  const [longer, setLonger] = useState(false)
   return (
     <figure className="space-y-1">
       <div
         className="relative aspect-video w-full overflow-hidden rounded-md bg-black"
         data-testid={end ? 'last-frame' : 'first-frame'}
         data-state={state}
+        data-error={why || undefined}
       >
         {src && (
           <video
-            src={src}
+            src={src(longer ? longerSeconds : undefined)}
             muted
             playsInline
             preload="auto"
@@ -108,17 +79,25 @@ function Frame({
             className="h-full w-full object-contain"
             onLoadedMetadata={(e) => {
               const v = e.currentTarget
+              if (v.videoWidth === 0) {
+                if (longer) {
+                  setState('failed')
+                } else {
+                  setLonger(true)
+                }
+                return
+              }
               // Past the stacked frames at the start; or onto the last frame (just before the end).
               v.currentTime =
                 end && Number.isFinite(v.duration) ? Math.max(0, v.duration - 0.01) : 0.04
             }}
             onSeeked={() => {
               setState('ready')
-              onDone?.()
             }}
-            onError={() => {
+            onError={(e) => {
+              const err = e.currentTarget.error
+              setWhy(err ? `${String(err.code)} ${err.message}` : '')
               setState('failed')
-              onDone?.()
             }}
           />
         )}

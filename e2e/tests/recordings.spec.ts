@@ -62,14 +62,32 @@ test('recordings: timeline, playback, export, delete, budget and guard', async (
   if (!box) throw new Error('no span on the timeline')
   await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2)
   await expect(page.getByTestId('selection-summary')).toContainText('segment')
-  // Its first and last frame: one-second exports the browser decodes and stops on, with a picture.
-  for (const which of ['first-frame', 'last-frame']) {
-    const frame = page.getByTestId(which)
-    await expect(frame).toHaveAttribute('data-state', 'ready', { timeout: 15_000 })
-    expect(
-      await frame.locator('video').evaluate((v: HTMLVideoElement) => v.videoWidth),
-    ).toBeGreaterThan(0)
+  // Its first and last frame: short MP4s the browser decodes and stops on, with a picture.
+  const framesReady = async () => {
+    for (const which of ['first-frame', 'last-frame']) {
+      const frame = page.getByTestId(which)
+      await expect(
+        frame,
+        `${which}: ${String(await frame.getAttribute('data-error'))}`,
+      ).toHaveAttribute('data-state', 'ready', { timeout: 15_000 })
+      expect(
+        await frame.locator('video').evaluate((v: HTMLVideoElement) => v.videoWidth),
+      ).toBeGreaterThan(0)
+    }
   }
+  await framesReady()
+  // The start handle, dragged right: the selection starts later, and the first frame follows.
+  const fromBefore = await page.getByLabel('From').inputValue()
+  const handle = await page.getByTestId('handle-start').boundingBox()
+  if (!handle) throw new Error('no start handle')
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(handle.x + handle.width / 2 + 30, handle.y + handle.height / 2, {
+    steps: 5,
+  })
+  await page.mouse.up()
+  await expect(page.getByLabel('From')).not.toHaveValue(fromBefore)
+  await framesReady()
   await page.getByRole('button', { name: 'Play' }).click()
   const src = await page.getByTestId('recording-player').getAttribute('src')
   expect(src).toContain('format=fmp4')
@@ -81,7 +99,8 @@ test('recordings: timeline, playback, export, delete, budget and guard', async (
   const victim = (await starts()).at(-2) ?? ''
   const t = new Date(victim)
   const local = new Date(t.getTime() - t.getTimezoneOffset() * 60_000).toISOString().slice(0, 19)
-  await page.getByLabel('From').fill(local)
+  // Chrome keeps a whole minute as HH:MM, and Playwright calls HH:MM:00 malformed then.
+  await page.getByLabel('From').fill(local.endsWith(':00') ? local.slice(0, 16) : local)
   await page.getByLabel('Length (seconds)').fill('1')
   await page.getByRole('button', { name: 'Delete 1 segment' }).click()
   await page
