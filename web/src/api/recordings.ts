@@ -89,14 +89,21 @@ export const segmentsQuery = (path: string) =>
   })
 
 /** Where to fetch a range: fmp4 plays in a <video>, mp4 (download) saves as a file. */
-export function exportURL(path: string, start: Date, seconds: number, format: 'mp4' | 'fmp4') {
+/** download asks for a file to save (Content-Disposition); by default for MP4, which is what Download offers. */
+export function exportURL(
+  path: string,
+  start: Date,
+  seconds: number,
+  format: 'mp4' | 'fmp4',
+  download = format === 'mp4',
+) {
   const q = new URLSearchParams({
     path,
     start: start.toISOString(),
     duration: seconds.toFixed(3),
     format,
   })
-  if (format === 'mp4') q.set('download', '1')
+  if (download) q.set('download', '1')
   return `/api/v1/recordings/export?${q.toString()}`
 }
 

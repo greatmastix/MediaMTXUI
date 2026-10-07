@@ -97,4 +97,37 @@ describe('recording', () => {
       'The duration is 0 to 7200 seconds.',
     )
   })
+
+  it('shows the first and the last recorded frame of the selection, one after the other', async () => {
+    withRecording(true)
+    renderApp('/recordings/cam1')
+    const selection = await screen.findByRole('region', { name: 'Selection' })
+    // From half an hour before the recording starts, for an hour: the first frame is where recording begins.
+    fireEvent.change(within(selection).getByLabelText('From'), {
+      target: { value: '2026-10-03T07:30:00' },
+    })
+    fireEvent.change(within(selection).getByLabelText('Length (seconds)'), {
+      target: { value: '3600' },
+    })
+    const first = await within(selection).findByLabelText('First frame of the selection')
+    const url = (v: HTMLElement) => new URL(v.getAttribute('src') ?? '', 'http://x').searchParams
+    expect(url(first).get('start')).toBe(start.toISOString())
+    expect(url(first).get('duration')).toBe('1.000')
+    expect(url(first).get('format')).toBe('mp4')
+    expect(url(first).get('download')).toBeNull()
+    // The last frame waits for the first: exports share a few slots.
+    expect(
+      within(selection).queryByLabelText('Last frame of the selection'),
+    ).not.toBeInTheDocument()
+    fireEvent.seeked(first)
+    expect(within(selection).getByTestId('first-frame')).toHaveAttribute('data-state', 'ready')
+    const last = await within(selection).findByLabelText('Last frame of the selection')
+    expect(url(last).get('start')).toBe(new Date(start.getTime() + 1800_000 - 1000).toISOString())
+    expect(within(selection).getByTestId('recording-frames')).toHaveTextContent(
+      'First frame · 08:00:00',
+    )
+    expect(within(selection).getByTestId('recording-frames')).toHaveTextContent(
+      'Last frame · 08:30:00',
+    )
+  })
 })

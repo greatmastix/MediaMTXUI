@@ -62,6 +62,14 @@ test('recordings: timeline, playback, export, delete, budget and guard', async (
   if (!box) throw new Error('no span on the timeline')
   await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2)
   await expect(page.getByTestId('selection-summary')).toContainText('segment')
+  // Its first and last frame: one-second exports the browser decodes and stops on, with a picture.
+  for (const which of ['first-frame', 'last-frame']) {
+    const frame = page.getByTestId(which)
+    await expect(frame).toHaveAttribute('data-state', 'ready', { timeout: 15_000 })
+    expect(
+      await frame.locator('video').evaluate((v: HTMLVideoElement) => v.videoWidth),
+    ).toBeGreaterThan(0)
+  }
   await page.getByRole('button', { name: 'Play' }).click()
   const src = await page.getByTestId('recording-player').getAttribute('src')
   expect(src).toContain('format=fmp4')

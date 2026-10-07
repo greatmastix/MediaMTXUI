@@ -14,6 +14,7 @@ import {
 } from '@/api/recordings'
 import { sessionQuery } from '@/api/sidecar'
 import { fieldClass } from '@/components/config/SettingsForm'
+import { RecordingFrames } from '@/components/RecordingFrames'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { formatBytes, formatDuration } from '@/lib/format'
 import { atLeast } from '@/lib/roles'
@@ -97,6 +98,19 @@ export function RecordingPage({ name }: { name: string }) {
   const selSeconds = sel ? (sel.end.getTime() - sel.start.getTime()) / 1000 : 0
   // The server exports at most so much at a time (MTXUI_EXPORT_MAX_DURATION); longer is refused, not shortened.
   const tooLong = maxSeconds !== undefined && selSeconds > maxSeconds
+  // What was recorded in the selection, which may begin or end in a gap: its first and last moment.
+  const recorded = sel
+    ? spanList.filter((sp) => sp.e > sel.start.getTime() && sp.s < sel.end.getTime())
+    : []
+  const firstRecorded = recorded[0]
+  const lastRecorded = recorded[recorded.length - 1]
+  const frames =
+    sel && firstRecorded && lastRecorded
+      ? {
+          first: new Date(Math.max(sel.start.getTime(), firstRecorded.s)),
+          last: new Date(Math.min(sel.end.getTime(), lastRecorded.e)),
+        }
+      : null
   const inSel = sel
     ? (segments.data ?? []).filter((g) => {
         const t = Date.parse(g.start)
@@ -341,6 +355,7 @@ export function RecordingPage({ name }: { name: string }) {
               {inSel.length > 0 &&
                 ` · ${String(inSel.length)} segment${inSel.length === 1 ? '' : 's'} start in it`}
             </p>
+            {frames && <RecordingFrames name={name} first={frames.first} last={frames.last} />}
             {tooLong && (
               <p className="text-sm text-muted-foreground" data-testid="export-too-long">
                 Play and download take at most {formatDuration(maxSeconds)} at a time: select less,

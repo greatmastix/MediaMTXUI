@@ -48,6 +48,11 @@ where each segment starts.
 Below the timeline the page sums up the selection: date, start and end time, length, and how many segments start in
 it.
 
+Under the summary, the selection's **first frame** and **last frame** appear, with their times, so you can see where
+an export will begin and end before you play or download it. Where the selection begins or ends in a gap, they show
+where the recording itself begins or ends. Each comes from a one-second export that your browser decodes, so they
+take a moment, and appear a little after you stop dragging.
+
 ## Playing and downloading
 
 With a stretch selected:
