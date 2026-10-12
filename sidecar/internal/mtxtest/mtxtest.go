@@ -26,6 +26,16 @@ func Bin(t testing.TB) string {
 	return bin
 }
 
+// Version returns the pinned release's version, e.g. "1.21.2" (deploy/tools.env), or skips the test.
+func Version(t testing.TB) string {
+	t.Helper()
+	v := os.Getenv("MTXUI_TEST_MEDIAMTX_VERSION")
+	if v == "" {
+		t.Skip("MTXUI_TEST_MEDIAMTX_VERSION is not set (./dev test sets it)")
+	}
+	return v
+}
+
 // Reference returns the pinned release's reference mediamtx.yml, or skips the test.
 func Reference(t testing.TB) string {
 	t.Helper()

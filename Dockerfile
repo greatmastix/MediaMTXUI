@@ -5,7 +5,7 @@
 # The ARG defaults mirror deploy/tools.env (`./dev lint` fails if they drift), because plain
 # `docker build .` uses them as they are.
 ARG NODE_IMAGE=node:24.21.0-alpine3.24@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1
-ARG MEDIAMTX_IMAGE=bluenviron/mediamtx:1.21.1@sha256:5ce2a948eb68df06ce2e13870db8df8e30d516ac4dc40e04bfe8aee3bdf7be40
+ARG MEDIAMTX_IMAGE=bluenviron/mediamtx:1.21.2@sha256:c7540465f868a02652118bea5a0daab12a29ac0f6cb8485abd535939ecddf886
 ARG GO_IMAGE=golang:1.27.2-trixie@sha256:e58d6f83b3416618d8bcac2b3dde1b7f7e3c4a77d25e88637f8bbae81536c48d
 
 FROM ${MEDIAMTX_IMAGE} AS mediamtx
@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY sidecar/ ./
 COPY --from=web /src/web/dist/ ./internal/webui/dist/
 ARG VERSION=dev
-ARG MEDIAMTX_VERSION=1.21.1
+ARG MEDIAMTX_VERSION=1.21.2
 ARG TARGETOS TARGETARCH TARGETVARIANT
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     export GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOARM=${TARGETVARIANT#v} \

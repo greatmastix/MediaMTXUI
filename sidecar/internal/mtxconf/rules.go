@@ -63,7 +63,7 @@ type listener struct {
 	proto string // tcp or udp
 }
 
-// listeners describes MediaMTX v1.21.1's servers: the switch that enables each, and its sockets with their default
+// listeners describes MediaMTX v1.21.2's servers: the switch that enables each, and its sockets with their default
 // addresses. TestDefaultsMatchReference checks the defaults against the pinned release's reference config.
 var listeners = []struct {
 	enable  string
@@ -82,7 +82,7 @@ var listeners = []struct {
 	{"playback", false, []listener{{"playbackAddress", "tcp"}}},
 }
 
-// defaultAddress holds v1.21.1's default for every address setting above and the conditional ones below.
+// defaultAddress holds v1.21.2's default for every address setting above and the conditional ones below.
 var defaultAddress = map[string]string{
 	"rtspAddress": ":8554", "rtspsAddress": ":8322", "rtpAddress": ":8000", "rtcpAddress": ":8001",
 	"rtmpAddress": ":1935", "rtmpsAddress": ":1936", "hlsAddress": ":8888", "webrtcAddress": ":8889",

@@ -2,7 +2,7 @@
 
 # MediaMTX API coverage
 
-Every operation of the MediaMTX v1.21.1 Control API (`spec/mediamtx/openapi.yaml`, 50 operations) and how this project uses it.
+Every operation of the MediaMTX v1.21.2 Control API (`spec/mediamtx/openapi.yaml`, 50 operations) and how this project uses it.
 **Access** is the minimum UI role for which the sidecar's API proxy forwards the call: `viewer` < `operator` < `admin`.
 `sidecar` operations are called only by the sidecar itself and never proxied for browsers; `unused` ones are never called.
 

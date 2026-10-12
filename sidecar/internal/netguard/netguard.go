@@ -103,7 +103,7 @@ func (g *Guard) CheckHost(ctx context.Context, host string) error {
 	return nil
 }
 
-// Source types (MediaMTX v1.21.1): pulled over the network, listened on, or not a URL at all.
+// Source types (MediaMTX v1.21.2): pulled over the network, listened on, or not a URL at all.
 var (
 	pullSchemes = map[string]bool{
 		"rtsp": true, "rtsps": true, "rtsp+http": true, "rtsps+http": true, "rtsp+ws": true, "rtsps+ws": true,

@@ -533,7 +533,7 @@ func TestWithMediaMTX(t *testing.T) {
 			t.Errorf("%s: available %v, want %v", s.kind, l.available, wantAvailable)
 		}
 	}
-	if !strings.Contains(string(h.lists["info"].value), `"version":"v1.21.1"`) {
+	if !strings.Contains(string(h.lists["info"].value), `"version":"v`+mtxtest.Version(t)+`"`) {
 		t.Errorf("info %s", h.lists["info"].value)
 	}
 }

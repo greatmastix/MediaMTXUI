@@ -242,7 +242,8 @@ pins_check() {
 test_go() {
   mediamtx_bin
   go_ env MTXUI_TEST_MEDIAMTX_BIN="/cache/mediamtx/$MEDIAMTX_VERSION/mediamtx" \
-    MTXUI_TEST_MEDIAMTX_REFERENCE="/cache/mediamtx/$MEDIAMTX_VERSION/mediamtx.yml" go test -race -count=1 "${@:-./...}"
+    MTXUI_TEST_MEDIAMTX_REFERENCE="/cache/mediamtx/$MEDIAMTX_VERSION/mediamtx.yml" \
+    MTXUI_TEST_MEDIAMTX_VERSION="$MEDIAMTX_VERSION" go test -race -count=1 "${@:-./...}"
 }
 test_web() { node_ npm test --silent; }
 
