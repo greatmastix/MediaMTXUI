@@ -3,7 +3,8 @@
 # cross-compile on the runner (Dockerfile), so no emulation is needed. Provenance and the SBOM are buildx's, attached
 # to the image; there is no GitHub attestation, so no job needs an OIDC token.
 #
-# On a tag, the install files then go to the GitHub release (created with generated notes if it does not exist yet):
+# On a tag, the install files then go to the GitHub release (created if it does not exist yet), with the tag's section
+# of CHANGELOG.md as its notes (checked first: without a section, nothing is published):
 # compose.yaml with the sidecar image pinned to that version, next to the MediaMTX image it pins already, so that the
 # README's install and upgrade always fetch a pair that was tested together; .env.example as env.example (GitHub
 # renames assets with a leading dot); the optional overrides (behind a proxy, local network, exposure control); and
@@ -30,6 +31,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A release's notes are its section of CHANGELOG.md: without one, nothing is published.
+      - name: Release notes in CHANGELOG.md
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: scripts/release-notes.sh "$TAG" >/dev/null
       - run: scripts/ci-run.sh ./dev ci
       - run: scripts/ci-run.sh ./dev e2e
 
@@ -103,15 +110,17 @@ jobs:
           cp .env.example dist/env.example
           cp deploy/compose.behind-proxy.yaml deploy/compose.exposure.yaml deploy/compose.lan.yaml dist/
           cp scripts/install.sh dist/install.sh
+          scripts/release-notes.sh "$TAG" >notes.md
       - name: Attach them to the release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
             gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
           else
             pre=()
             [[ $TAG == *-* ]] && pre=(--prerelease) # a pre-release is never releases/latest
-            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes "${pre[@]}"
+            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --notes-file notes.md "${pre[@]}"
           fi

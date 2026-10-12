@@ -88,13 +88,23 @@ Installs get the new MediaMTX with the next release's `compose.yaml`, together w
 
 ## Releases
 
-Pushing a tag `v1.2.3` runs the checks and publishes the multi-arch image to
-`ghcr.io/greatmastix/mediamtxui` as `1.2.3`, `1.2`, `1` and `latest` (`.github/workflows/release.yml`). Every push
-to `main` publishes `edge`, the image `compose.yaml` names on `main`.
+Every change worth telling users about gets a line under **Unreleased** in `CHANGELOG.md`, in the same commit.
 
-The tag then attaches the install files to the GitHub release `v1.2.3`, which it creates with generated notes if it
-does not exist yet (edit them afterwards): `compose.yaml` with the sidecar image pinned to `1.2.3`, `env.example`
-(`.env.example`; GitHub renames assets with a leading dot) and the overrides `compose.behind-proxy.yaml` and
+To release `1.2.3`:
+
+1. In `CHANGELOG.md`, rename **Unreleased** to `[1.2.3] - <date>`, start a new empty **Unreleased** above it, and
+   update the compare links at the bottom. Preview the notes with `scripts/release-notes.sh 1.2.3`.
+2. Commit and push to `main`, and wait for its CI.
+3. Push the tag: `git tag -a v1.2.3 -m "MediaMTX UI 1.2.3" && git push origin v1.2.3`. Do not create the release on
+   GitHub first: the workflow creates it.
+
+The tag runs the checks (first of all, that `CHANGELOG.md` has notes for `1.2.3`: without them nothing is published)
+and publishes the multi-arch image to `ghcr.io/greatmastix/mediamtxui` as `1.2.3`, `1.2`, `1` and `latest`
+(`.github/workflows/release.yml`). Every push to `main` publishes `edge`, the image `compose.yaml` names on `main`.
+
+It then creates the GitHub release `v1.2.3` with that section of `CHANGELOG.md` as its notes, and attaches the
+install files: `compose.yaml` with the sidecar image pinned to `1.2.3`, `env.example` (`.env.example`; GitHub renames
+assets with a leading dot), `install.sh` and the add-ons `compose.behind-proxy.yaml`, `compose.lan.yaml` and
 `compose.exposure.yaml`. The README installs and upgrades from `releases/latest/download/`, so every release needs
 them. A tag with a suffix (`v1.3.0-rc.1`) makes a pre-release, which those links skip.
 
