@@ -166,9 +166,11 @@ test('the config UI: a path, a global setting, the YAML check and the history', 
 
 /** The RTSP session of the test publisher, as MediaMTX reports it. */
 async function publisherSession(request: import('@playwright/test').APIRequestContext) {
+  // Right after a reload MediaMTX's API may briefly not answer (an error, no list): no session then, and callers poll.
   const res = await request.get('/api/mtx/v3/rtsp/sessions/list')
-  const list = (await res.json()) as { items: { id: string; path: string; state: string }[] }
-  return list.items.find((s) => s.path === 'test' && s.state === 'publish')?.id
+  if (!res.ok()) return undefined
+  const list = (await res.json()) as { items?: { id: string; path: string; state: string }[] }
+  return list.items?.find((s) => s.path === 'test' && s.state === 'publish')?.id
 }
 
 test('every source type is accepted by MediaMTX', async ({ playwright }) => {
@@ -260,14 +262,14 @@ test('a refused config and an HLS change leave the RTSP publisher connected', as
   })
   expect(res.status(), await res.text()).toBe(200)
   expect(((await res.json()) as { applied?: { state: string } }).applied?.state).toBe('verified')
-  expect(await publisherSession(request)).toBe(session)
+  await expect.poll(() => publisherSession(request), { timeout: 10_000 }).toBe(session)
 
   res = await request.patch('/api/v1/config/global', {
     headers,
     data: { remove: ['hlsSegmentCount'] },
   })
   expect(res.status(), await res.text()).toBe(200)
-  expect(await publisherSession(request)).toBe(session)
+  await expect.poll(() => publisherSession(request), { timeout: 10_000 }).toBe(session)
   await request.dispose()
 })
 

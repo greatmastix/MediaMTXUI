@@ -113,7 +113,7 @@ describe('recording', () => {
     const first = url(await within(selection).findByLabelText('First frame of the selection'))
     const last = url(await within(selection).findByLabelText('Last frame of the selection'))
     expect(first.pathname).toBe('/api/v1/recordings/frame')
-    expect(first.searchParams.get('at')).toBe(start.toISOString())
+    expect(first.searchParams.get('at')).toBe(new Date(start.getTime() + 1).toISOString())
     expect(first.searchParams.get('edge')).toBe('first')
     expect(last.searchParams.get('at')).toBe(new Date(start.getTime() + 1800_000).toISOString())
     expect(last.searchParams.get('edge')).toBe('last')

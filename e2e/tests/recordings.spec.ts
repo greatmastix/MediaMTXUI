@@ -75,6 +75,16 @@ test('recordings: timeline, playback, export, delete, budget and guard', async (
       ).toBeGreaterThan(0)
     }
   }
+  // Checked on a recent, complete segment: this test's small budget keeps deleting the oldest, which can take the
+  // start of the stretch just selected (its frame then rightly shows no picture).
+  const recent = new Date((await starts()).at(-3) ?? '')
+  const inside = new Date(Math.ceil(recent.getTime() / 1000) * 1000 + 1000)
+  await page
+    .getByLabel('From')
+    .fill(
+      new Date(inside.getTime() - inside.getTimezoneOffset() * 60_000).toISOString().slice(0, 19),
+    )
+  await page.getByLabel('Length (seconds)').fill('2')
   await framesReady()
   // The start handle, dragged right: the selection starts later, and the first frame follows.
   const fromBefore = await page.getByLabel('From').inputValue()

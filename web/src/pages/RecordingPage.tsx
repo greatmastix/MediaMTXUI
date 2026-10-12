@@ -111,7 +111,9 @@ export function RecordingPage({ name }: { name: string }) {
   const frames =
     sel && firstRecorded && lastRecorded
       ? {
-          first: new Date(Math.max(sel.start.getTime(), firstRecorded.s)),
+          // A recorded stretch starts with microseconds, which a Date drops: a millisecond later is surely inside it
+          // (MediaMTX finds nothing at a moment before its first segment).
+          first: new Date(Math.max(sel.start.getTime(), firstRecorded.s + 1)),
           last: new Date(Math.min(sel.end.getTime(), lastRecorded.e)),
         }
       : null
