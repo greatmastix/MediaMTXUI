@@ -600,6 +600,13 @@ cmd_e2e() {
   check_state_files
 }
 
+# Vulnerabilities in MediaMTX's own binary that ./dev audit tolerates, for MTX_TOLERATED_FOR only, and why:
+# golang.org/x/net v0.59.0's HTTP/2 (GO-2026-6617 HPACK race, GO-2026-6612 flow control refund, GO-2026-6611 window
+# changes, GO-2026-6603 trailers; fixed in v0.60.0). MediaMTX's HTTP servers are plain HTTP inside the stack, reached
+# only by the sidecar, so HTTP/2 never runs there.
+MTX_TOLERATED_FOR=1.21.2
+MTX_TOLERATED=(GO-2026-6617 GO-2026-6612 GO-2026-6611 GO-2026-6603)
+
 # cmd_audit: the checks that need today's advisories. The image is FROM scratch: the CA bundle, the sidecar's two
 # binaries and MediaMTX's. govulncheck reads the sidecar's source (symbol-level, with the Go toolchain and go.sum the
 # image is built with; the image's binaries are stripped, which leaves binary mode guessing per module) and
@@ -611,7 +618,13 @@ cmd_audit() {
   NET=bridge go_ go run "$govulncheck" ./...
   step "audit: MediaMTX $MEDIAMTX_VERSION's binary"
   mediamtx_bin
-  NET=bridge go_ go run "$govulncheck" -mode binary "/cache/mediamtx/$MEDIAMTX_VERSION/mediamtx"
+  # Only an upstream release can fix what is in MediaMTX's binary. What is judged unreachable in this stack is
+  # tolerated for exactly the pinned release (MTX_TOLERATED_FOR): a bump judges the next one afresh.
+  local tolerated=()
+  [[ $MEDIAMTX_VERSION == "$MTX_TOLERATED_FOR" ]] && tolerated=("${MTX_TOLERATED[@]}")
+  NET=bridge go_ go run "$govulncheck" -mode binary -format openvex "/cache/mediamtx/$MEDIAMTX_VERSION/mediamtx" \
+    >"$CACHE/mediamtx-vex.json"
+  run "$NODE_IMAGE" . -- node scripts/vuln-check.mjs /cache/mediamtx-vex.json ${tolerated[@]+"${tolerated[@]}"}
   step "audit: npm"
   for dir in web e2e; do
     echo "-- $dir"
