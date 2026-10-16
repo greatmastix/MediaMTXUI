@@ -125,6 +125,7 @@ func (s *Server) Public() http.Handler {
 		s.handle(api, http.MethodGet, "/v1/users/{id}/sessions", Admin, s.userSessions)
 		s.handleStepUp(api, http.MethodDelete, "/v1/users/{id}/sessions", Admin, s.userSessionsEnd)
 		s.handleStepUp(api, http.MethodDelete, "/v1/users/{id}/second-factor", Admin, s.userSecondFactorReset)
+		s.handleStepUp(api, http.MethodPut, "/v1/users/{id}/password", Admin, s.userPassword)
 		s.handle(api, http.MethodGet, "/v1/backups", Admin, s.backupsList)
 		s.handle(api, http.MethodPost, "/v1/backups", Admin, s.backupCreate)
 		s.handleStepUp(api, http.MethodPut, "/v1/backups/passphrase", Admin, s.backupPassphrase)

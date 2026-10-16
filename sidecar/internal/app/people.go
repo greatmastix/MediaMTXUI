@@ -312,6 +312,56 @@ func (s *Server) userSecondFactorReset(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// maxPasswordBytes caps what an admin may set: hashing time grows with the input (auth.ValidatePassword's cap too).
+const maxPasswordBytes = 1024
+
+// userPassword lets an admin set someone's password outright, without the rules sign-up and the Account page keep
+// (length, not the username): the admin decides. Not empty, and at most maxPasswordBytes. The person is signed out
+// everywhere (the admin keeps their own session when they set their own), an outstanding join or reset code stops
+// working, and an invited person who had not joined yet can sign in with it. Second factors stay. The audit entry
+// says whether the password would have passed the usual rules; the password goes nowhere but its hash.
+func (s *Server) userPassword(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	u, ok := s.userFromURL(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Password string `json:"password"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	switch {
+	case body.Password == "":
+		writeError(w, http.StatusBadRequest, "invalid", "Enter a password.")
+		return
+	case len(body.Password) > maxPasswordBytes:
+		writeError(w, http.StatusBadRequest, "invalid", fmt.Sprintf("A password is at most %d bytes.", maxPasswordBytes))
+		return
+	}
+	hash, err := s.d.Hasher.Hash(ctx, body.Password)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "busy", "The server is busy. Try again.")
+		return
+	}
+	cur, _ := current(ctx)
+	keep := ""
+	if cur.user.ID == u.ID {
+		keep = cur.session.IDHash
+	}
+	ended, err := s.d.Store.SetPasswordByAdmin(ctx, u.ID, hash, keep)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", "Cannot save the password.")
+		return
+	}
+	s.sessionNudge.fire()
+	audit.Set(ctx, "user.password.set", u.Username, map[string]any{
+		"endedSessions": ended, "meetsRules": auth.ValidatePassword(body.Password, u.Username) == nil,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) userDelete(w http.ResponseWriter, r *http.Request) {
 	u, ok := s.userFromURL(w, r)
 	if !ok {

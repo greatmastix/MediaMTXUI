@@ -313,7 +313,7 @@ the code when a warning first appears.
 
 **Lost password, another admin exists:** the other admin opens **People**, presses **Reset password** for your
 account, and gives you the join code it shows. Open `/join` on your UI's address, enter the code, and choose a new
-password.
+password. (Or the other admin sets a password for you: Edit, then **Set password**.)
 
 **Lost the authenticator app:** sign in with one of your recovery codes instead of the app's code ("Lost your phone?
 Enter one of your recovery codes instead."). No recovery codes either: another admin presses **Reset second factor**

@@ -117,7 +117,7 @@ It records, among other things:
 
 - signing in and out, failed and locked sign-ins, joining with a code, "Confirm it's you";
 - changes to your own account (password, authenticator app, passkeys, sessions);
-- people: invitations, join and reset codes, roles, disabling, deleting, second-factor resets;
+- people: invitations, join and reset codes, roles, disabling, deleting, second-factor resets, passwords set by an admin;
 - credentials created and revoked; stream keys shown or regenerated;
 - streams: created, changed, deleted, disconnected, forwarding, guest keys, holding clips;
 - every configuration change, with its version number, including refused ones and why they were refused;

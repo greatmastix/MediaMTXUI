@@ -44,6 +44,10 @@ viewer changing settings). An admin can change everything by design; the host an
   it is audited.
   *Evidence:* `TestChangeUserKeepsAnAdmin` (internal/store), `TestResetPassword` (internal/cli),
   `TestIssueJoinCodeResetsAPassword`.
+- [x] **An admin may set a password that breaks the rules**, on purpose (a kiosk, a shared account). It needs "Confirm
+  it's you", ends the person's sessions and unused codes, leaves their second factors in place, and is audited
+  (`user.password.set`) with whether it met the rules; the password itself is never logged.
+  *Evidence:* `TestAdminSetsPassword`, `TestStepUpRoutes`.
 - [x] **Taking access away takes effect now.** Disabling, deleting, demoting or signing out someone (a password
   change and "sign out everywhere" included) closes their open live views within seconds; making a stream private or
   deleting it disconnects its anonymous viewers within about 2 s; what a guest key opened is disconnected when the

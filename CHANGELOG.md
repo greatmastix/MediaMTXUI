@@ -8,6 +8,12 @@ any add-on file you use, such as `compose.lan.yaml`), then `docker compose pull 
 
 ## [Unreleased]
 
+### New
+
+- **Admins can set a password** for anyone on **People** (Edit, then Set password), including people invited but
+  not joined yet. The usual password rules do not apply; it signs the person out everywhere and is audited. See
+  [Setting a password](docs/people.md#setting-a-password).
+
 ### Changed
 
 - Release notes come from this file: a release cannot be published without its section here.

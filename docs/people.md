@@ -81,7 +81,9 @@ an admin first. Having two admins is a good idea anyway: either can reset the ot
 
 ## Resetting a password
 
-Passwords are never shown or set by an admin. Instead, a reset is a join code for an existing account:
+Passwords are never shown. There are two ways to get someone signed in again: a reset code, with which they choose
+their own password, or [setting a password](#setting-a-password) for them. A reset code is a join code for an existing
+account:
 
 1. On **People**, press **Reset password** next to the person.
 2. Read the note, then press **Make a reset code for NAME**.
@@ -90,6 +92,25 @@ Passwords are never shown or set by an admin. Instead, a reset is a join code fo
 Until the code is used, their old password keeps working. When it is used, all their other sessions end. Be careful
 with a reset code: whoever has it can choose a new password and sign in as that person, without their authenticator
 app or passkey. If it may have gone astray, make another one; that ends the first.
+
+## Setting a password
+
+An admin can also set someone's password directly, for example for a shared account, a kiosk, or someone who cannot
+use the join page. It works for invited people who have not joined yet too, instead of passing on the join code.
+
+1. On **People**, press **Edit** next to the person.
+2. Under **Sign-in and access**, press **Set password**, enter it and press **Set password** again. You confirm it's
+   you first, if you have not in the last hour.
+
+The usual password rules do not apply: whatever you enter is set, even a short or common one, so choose with care.
+Setting it:
+
+- signs the person out everywhere (your own password: everywhere but here);
+- ends any join or reset code of theirs not used yet;
+- leaves their authenticator app and passkeys as they were: they still need them to sign in.
+
+The audit log records it as `user.password.set`, with whether the password met the usual rules, never the password
+itself.
 
 ### When nobody can sign in as an admin
 

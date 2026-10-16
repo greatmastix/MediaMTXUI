@@ -240,7 +240,7 @@ func TestStepUpRoutes(t *testing.T) {
 	}
 	want := []string{
 		"POST /api/v1/users", "POST /api/v1/users/{id}/join-code", "PATCH /api/v1/users/{id}", "DELETE /api/v1/users/{id}",
-		"DELETE /api/v1/users/{id}/sessions", "DELETE /api/v1/users/{id}/second-factor",
+		"DELETE /api/v1/users/{id}/sessions", "DELETE /api/v1/users/{id}/second-factor", "PUT /api/v1/users/{id}/password",
 		"POST /api/v1/credentials", "POST /api/v1/credentials/{name}/revoke",
 		"PUT /api/v1/exposure/{id}", "DELETE /api/v1/exposure/{id}", "POST /api/v1/exposure/close-all", "PUT /api/v1/exposure/auto",
 		"PUT /api/v1/config", "POST /api/v1/config/snapshots/{id}/restore", "PUT /api/v1/account/step-up",

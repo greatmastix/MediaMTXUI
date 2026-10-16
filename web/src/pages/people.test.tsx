@@ -131,4 +131,32 @@ describe('people', () => {
     )
     expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1)
   })
+
+  it('sets a password without the usual rules', async () => {
+    const { calls } = fakeSidecar(
+      { session: adminSession },
+      {
+        'GET /api/v1/users': () => json(200, people),
+        'GET /api/v1/users/2/sessions': () => json(200, []),
+        'PUT /api/v1/users/2/password': () => new Response(null, { status: 204 }),
+      },
+    )
+    renderApp('/people')
+    const row = await screen.findByTestId('person-boss')
+    const user = userEvent.setup()
+    await user.click(within(row).getByRole('button', { name: 'Edit' }))
+    const access = await screen.findByRole('group', { name: "boss's sign-in" })
+    await user.click(within(access).getByRole('button', { name: 'Set password' }))
+    const form = within(access).getByRole('form', { name: "Set boss's password" })
+    expect(within(form).getByRole('button', { name: 'Set password' })).toBeDisabled()
+    expect(form).toHaveTextContent('The usual password rules do not apply here')
+    await user.type(within(form).getByLabelText('New password for boss'), 'x')
+    await user.click(within(form).getByRole('button', { name: 'Set password' }))
+    expect(await within(access).findByRole('status')).toHaveTextContent(
+      'boss was signed out everywhere and signs in with the new password',
+    )
+    const put = calls.find((c) => c.method === 'PUT')
+    expect(put?.path).toBe('/api/v1/users/2/password')
+    expect(put?.body).toEqual({ password: 'x' })
+  })
 })

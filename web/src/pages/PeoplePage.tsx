@@ -16,6 +16,7 @@ import {
   personSessionsQuery,
   resetSecondFactor,
   setDisabled,
+  setPassword,
 } from '@/api/people'
 import { streamsQuery, updateStream } from '@/api/streams'
 import { sessionQuery } from '@/api/sidecar'
@@ -433,7 +434,7 @@ function PeopleTable({ people, onCode }: { people: Person[]; onCode: (inv: Invit
                           setEditing(null)
                         }}
                       />
-                      {!p.pending && <PersonAccess person={p} self={p.id === session?.user.id} />}
+                      <PersonAccess person={p} self={p.id === session?.user.id} />
                     </TableCell>
                   </TableRow>
                 )}
@@ -563,8 +564,61 @@ function PersonAccess({ person: p, self }: { person: Person; self: boolean }) {
   })
   const signOut = useMutation({ mutationFn: () => endSessions(p.id), onSuccess: refresh })
   const reset = useMutation({ mutationFn: () => resetSecondFactor(p.id), onSuccess: refresh })
+  const [settingPassword, setSettingPassword] = useState(false)
+  const password = useMutation({
+    mutationFn: (pw: string) => setPassword(p.id, pw),
+    onSuccess: () => {
+      setSettingPassword(false)
+      refresh()
+    },
+  })
   const n = sessions.data?.length ?? 0
-  const error = disable.error ?? signOut.error ?? reset.error
+  const error = disable.error ?? signOut.error ?? reset.error ?? password.error
+  if (p.pending) {
+    // Not joined yet: instead of passing on the join code, an admin may set the password.
+    return (
+      <div
+        className="mt-3 space-y-2 border-t pt-3 text-sm"
+        aria-label={`${p.username}'s sign-in`}
+        role="group"
+      >
+        <p className="font-medium">Sign-in and access</p>
+        <p className="text-muted-foreground">
+          {p.username} has not joined yet. Instead of passing on the join code, you can set a
+          password.
+        </p>
+        {settingPassword ? (
+          <SetPasswordForm
+            person={p}
+            self={false}
+            saving={password.isPending}
+            onSave={(pw) => {
+              password.mutate(pw)
+            }}
+            onCancel={() => {
+              setSettingPassword(false)
+            }}
+          />
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setSettingPassword(true)
+              password.reset()
+            }}
+          >
+            Set password
+          </Button>
+        )}
+        {error && (
+          <p role="alert" className="text-destructive">
+            {errorText(error, 'That did not work.')}
+          </p>
+        )}
+      </div>
+    )
+  }
   return (
     <div
       className="mt-3 space-y-2 border-t pt-3 text-sm"
@@ -614,7 +668,40 @@ function PersonAccess({ person: p, self }: { person: Person; self: boolean }) {
             Reset second factor
           </Button>
         )}
+        {!settingPassword && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setSettingPassword(true)
+              password.reset()
+            }}
+          >
+            Set password
+          </Button>
+        )}
       </div>
+      {settingPassword && (
+        <SetPasswordForm
+          person={p}
+          self={self}
+          saving={password.isPending}
+          onSave={(pw) => {
+            password.mutate(pw)
+          }}
+          onCancel={() => {
+            setSettingPassword(false)
+          }}
+        />
+      )}
+      {password.isSuccess && (
+        <p role="status">
+          Password set.{' '}
+          {self
+            ? 'You stay signed in here; your other sessions ended.'
+            : `${p.username} was signed out everywhere and signs in with the new password.`}
+        </p>
+      )}
       {reset.isSuccess && (
         <p role="status">
           Their authenticator app, recovery codes and passkeys are gone; they sign in with their
@@ -627,5 +714,69 @@ function PersonAccess({ person: p, self }: { person: Person; self: boolean }) {
         </p>
       )}
     </div>
+  )
+}
+
+/** An admin sets someone's password: no rules but not empty, as the admin decides. */
+function SetPasswordForm({
+  person: p,
+  self,
+  saving,
+  onSave,
+  onCancel,
+}: {
+  person: Person
+  self: boolean
+  saving: boolean
+  onSave: (password: string) => void
+  onCancel: () => void
+}) {
+  const [value, setValue] = useState('')
+  const [show, setShow] = useState(false)
+  return (
+    <form
+      className="space-y-2 rounded-lg border p-3"
+      aria-label={`Set ${p.username}'s password`}
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (value !== '') onSave(value)
+      }}
+    >
+      <label className="block space-y-1">
+        <span className="font-medium">New password for {p.username}</span>
+        <input
+          type={show ? 'text' : 'password'}
+          autoComplete="new-password"
+          className={fieldClass}
+          value={value}
+          onChange={(e) => {
+            setValue(e.target.value)
+          }}
+        />
+      </label>
+      <label className="flex items-center gap-2 text-muted-foreground">
+        <input
+          type="checkbox"
+          checked={show}
+          onChange={(e) => {
+            setShow(e.target.checked)
+          }}
+        />
+        Show it
+      </label>
+      <p className="text-muted-foreground">
+        The usual password rules do not apply here: any password you enter is set.{' '}
+        {self ? 'Your other sessions end' : `${p.username} is signed out everywhere`}, and a join or
+        reset code not used yet stops working. Their authenticator app and passkeys stay.
+      </p>
+      <div className="flex gap-2">
+        <Button size="sm" type="submit" disabled={saving || value === ''}>
+          Set password
+        </Button>
+        <Button size="sm" type="button" variant="outline" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </form>
   )
 }

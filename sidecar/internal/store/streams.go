@@ -297,6 +297,31 @@ func (s *Store) RedeemJoinCode(ctx context.Context, codeHash, passwordHash strin
 	return s.UserByID(ctx, userID)
 }
 
+// SetPasswordByAdmin sets a user's password hash for an admin, in one transaction: the user's unused join codes stop
+// working (a code would let its holder choose another password), and the user's sessions end, except keep (the
+// admin's own, when they set their own password; "" for none). It returns how many sessions ended.
+func (s *Store) SetPasswordByAdmin(ctx context.Context, id int64, hash, keep string) (int64, error) {
+	now := ms(s.now())
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback() //nolint:errcheck // after Commit, a no-op
+	res, err := tx.ExecContext(ctx, `UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`, hash, now, id)
+	if err := affected(res, err); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM join_codes WHERE user_id = ? AND used_at IS NULL`, id); err != nil {
+		return 0, err
+	}
+	res, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ? AND id_hash != ?`, id, keep)
+	if err != nil {
+		return 0, err
+	}
+	ended, _ := res.RowsAffected()
+	return ended, tx.Commit()
+}
+
 // JoinCodeExpiry reports when a user's unused join code expires, if there is one.
 func (s *Store) JoinCodeExpiry(ctx context.Context, userID int64) (*time.Time, error) {
 	var at int64

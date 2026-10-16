@@ -56,6 +56,10 @@ export const endSessions = (id: number) =>
 export const resetSecondFactor = (id: number) =>
   requestNoContent('DELETE', `/api/v1/users/${String(id)}/second-factor`)
 
+/** Sets a person's password outright, without the usual rules; they are signed out everywhere (yourself: elsewhere). */
+export const setPassword = (id: number, password: string) =>
+  requestNoContent('PUT', `/api/v1/users/${String(id)}/password`, { password })
+
 export const personSessionsQuery = (id: number) =>
   queryOptions({
     queryKey: ['people', id, 'sessions'],
