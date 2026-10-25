@@ -8,6 +8,8 @@ any add-on file you use, such as `compose.lan.yaml`), then `docker compose pull 
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-25
+
 ### New
 
 - **A stretch of a recording as the holding screen.** On a stream's recording, select up to an hour and press **Use
@@ -110,7 +112,8 @@ The first public release: streams with their own pages and keys, live view and m
 holding screens, people and roles with second factors, configuration of MediaMTX with history, logs, audit log and
 encrypted backups; HTTPS from Let's Encrypt built in, or a local network only.
 
-[Unreleased]: https://github.com/greatmastix/MediaMTXUI/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/greatmastix/MediaMTXUI/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/greatmastix/MediaMTXUI/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/greatmastix/MediaMTXUI/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/greatmastix/MediaMTXUI/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/greatmastix/MediaMTXUI/compare/v1.2.0...v1.2.1
