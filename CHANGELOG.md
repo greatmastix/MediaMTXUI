@@ -8,6 +8,13 @@ any add-on file you use, such as `compose.lan.yaml`), then `docker compose pull 
 
 ## [Unreleased]
 
+### New
+
+- **Know when there is a new version.** Admins see a notice when a newer release is out, with links to what is new
+  and how to update. **Skip this version** or **Remind me in 7 days** keeps it quiet, per admin; the dashboard still
+  says it next to the version. The sidecar asks GitHub once a day; switch it off on the dashboard, or with
+  `MTXUI_UPDATE_CHECK=off`. See [Upgrading](docs/upgrading.md#knowing-when-there-is-a-new-version).
+
 ## [1.4.0] - 2026-10-25
 
 ### New

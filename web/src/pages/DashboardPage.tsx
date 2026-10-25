@@ -1,9 +1,10 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useState, type ReactNode } from 'react'
 
 import { metricsHistoryQuery, rangeMs, rangeStepMs, type HistoryRange } from '@/api/history'
-import { healthQuery, statusQuery } from '@/api/sidecar'
+import { healthQuery, sessionQuery, statusQuery } from '@/api/sidecar'
+import { setUpdateCheck, updatesQuery } from '@/api/updates'
 import { streamsQuery } from '@/api/streams'
 import { RangePicker } from '@/components/RangePicker'
 import { StatusPill } from '@/components/StatusPill'
@@ -148,8 +149,12 @@ export function DashboardPage() {
               <dt className="text-muted-foreground">Built for MediaMTX</dt>
               <dd data-testid="mediamtx-version">{health?.mediamtxVersion ?? '–'}</dd>
               <dt className="text-muted-foreground">Sidecar</dt>
-              <dd data-testid="sidecar-version">{health?.version ?? '–'}</dd>
+              <dd data-testid="sidecar-version">
+                {health?.version ?? '–'}
+                <NewVersion />
+              </dd>
             </dl>
+            <UpdateSwitch />
           </CardContent>
         </Card>
       </div>
@@ -309,5 +314,64 @@ function DashboardCharts({ live, now }: { live: readonly Sample[]; now: number }
         </Card>
       </div>
     </section>
+  )
+}
+
+/** A newer release, beside the version, for admins: also after they dismissed the notice. */
+function NewVersion() {
+  const { data: session } = useQuery(sessionQuery)
+  const admin = session?.user.role === 'admin'
+  const { data: u } = useQuery({ ...updatesQuery, enabled: admin })
+  if (!admin || !u?.available || !u.latest) return null
+  return (
+    <>
+      {' · '}
+      <a
+        className="underline"
+        href={u.page}
+        target="_blank"
+        rel="noreferrer"
+        data-testid="new-version"
+      >
+        {u.latest} is out
+      </a>
+    </>
+  )
+}
+
+/** Whether the sidecar asks GitHub for new releases (admins). */
+function UpdateSwitch() {
+  const queryClient = useQueryClient()
+  const { data: session } = useQuery(sessionQuery)
+  const admin = session?.user.role === 'admin'
+  const { data: u } = useQuery({ ...updatesQuery, enabled: admin })
+  const change = useMutation({
+    mutationFn: setUpdateCheck,
+    onSuccess: (next) => {
+      queryClient.setQueryData(updatesQuery.queryKey, next)
+    },
+  })
+  if (!admin || !u) return null
+  const locked = u.locked !== '' && !u.checking
+  return (
+    <div className="mt-4 space-y-1 text-sm">
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={u.checking}
+          disabled={locked || change.isPending}
+          onChange={(e) => {
+            change.mutate(e.target.checked)
+          }}
+        />
+        Check for new versions
+      </label>
+      <p className="text-xs text-muted-foreground" data-testid="update-check-note">
+        {locked
+          ? `Off: ${u.locked}.`
+          : 'Once a day the sidecar asks GitHub for the latest release, and admins see when there is a new one.'}
+        {u.checking && u.error ? ` The last check failed: ${u.error}.` : ''}
+      </p>
+    </div>
   )
 }

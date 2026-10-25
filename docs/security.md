@@ -221,6 +221,9 @@ Decisions, and limits we accept, so you can judge them for your setup.
   private LAN addresses included (another server or a recorder next door), never to the server itself, the stack's
   own network or cloud metadata services. If your LAN holds services that must not receive a stream, give streamer
   accounts only to people you trust with that.
+- **The sidecar asks GitHub for new releases**, once a day (`api.github.com`, with the version as its user agent),
+  unless an admin switches it off or `MTXUI_UPDATE_CHECK=off` is set. It shows admins only the version number and a
+  link to the release's page on GitHub, both checked, nothing else from the answer.
 - **Plain HTTP** (a `PUBLIC_URL` with `http://`, for a LAN) has no `Secure` cookie and no passkeys. Use HTTPS on
   anything reachable from the internet.
 - **Stream protocols carry their own risks.** RTMP, RTSP and SRT without encryption send stream keys in clear; use

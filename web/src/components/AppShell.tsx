@@ -28,6 +28,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ApiError } from '@/api/client'
 import { dismissDrift } from '@/api/config'
 import { changeSession, logout, sessionQuery, statusQuery, type Session } from '@/api/sidecar'
+import { dismissUpdate, updatesQuery, upgradeGuide } from '@/api/updates'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button, buttonVariants } from '@/components/ui/button'
 import {
@@ -365,6 +366,63 @@ function Account() {
 }
 
 /** For an outside edit of mediamtx.yml: look at it in the history, or acknowledge it. */
+/**
+ * A new release, for an admin who has neither skipped it nor asked to be reminded later. The dashboard keeps saying
+ * it next to the version, quietly, after either.
+ */
+function UpdateNotice() {
+  const queryClient = useQueryClient()
+  const { data: u } = useQuery(updatesQuery)
+  const answer = useMutation({
+    mutationFn: dismissUpdate,
+    onSuccess: (next) => {
+      queryClient.setQueryData(updatesQuery.queryKey, next)
+    },
+  })
+  if (!u?.show || !u.latest) return null
+  return (
+    <Alert role="status" data-testid="update-available">
+      <AlertTitle>MediaMTX UI {u.latest} is out</AlertTitle>
+      <AlertDescription>
+        <span>
+          This server runs {u.current}.{' '}
+          {u.page && (
+            <a className="underline" href={u.page} target="_blank" rel="noreferrer">
+              What&apos;s new
+            </a>
+          )}
+          {' · '}
+          <a className="underline" href={upgradeGuide(u.latest)} target="_blank" rel="noreferrer">
+            How to update
+          </a>
+        </span>
+        <span className="mt-2 flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={answer.isPending}
+            onClick={() => {
+              answer.mutate('skip')
+            }}
+          >
+            Skip this version
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={answer.isPending}
+            onClick={() => {
+              answer.mutate('later')
+            }}
+          >
+            Remind me in 7 days
+          </Button>
+        </span>
+      </AlertDescription>
+    </Alert>
+  )
+}
+
 function DriftActions() {
   const queryClient = useQueryClient()
   const dismiss = useMutation({
@@ -419,6 +477,7 @@ function Banners() {
           </AlertDescription>
         </Alert>
       )}
+      {admin && <UpdateNotice />}
       {st?.warnings.map((w) => (
         <Alert key={w.code} role="status" data-testid={`warning-${w.code}`}>
           <AlertDescription>

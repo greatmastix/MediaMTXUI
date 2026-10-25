@@ -94,6 +94,7 @@ type Server struct {
 	flows        authFlows     // second-factor sign-ins, passkey ceremonies, TOTP setups in progress
 	recWake      chan struct{} // runs the recordings budget now (after a deletion)
 	bk           backupState
+	updates      updateState // what the last check for a new release found
 	routes       []Route
 }
 

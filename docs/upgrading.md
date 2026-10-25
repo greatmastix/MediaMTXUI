@@ -7,6 +7,26 @@
 This page explains how to move an existing MediaMTX UI install to a newer release, how to stay on a particular
 version, and what to do if an upgrade goes wrong. It is for whoever looks after the server.
 
+## Knowing when there is a new version
+
+Admins see a notice at the top of every page when a newer release is out: "MediaMTX UI 1.5.0 is out", with links
+to what is new and to this page. Each admin can answer it for themselves:
+
+- **Skip this version**: no more notice until a release newer than that one.
+- **Remind me in 7 days**: no notice for a week.
+
+Either way, the dashboard keeps showing "1.5.0 is out" next to the version (under **Stack**).
+
+For this, the sidecar asks GitHub for the latest release once a day (one request to `api.github.com`; it sends no
+data about your server beyond what any request does: its address and the version, as its user agent). A server
+without internet simply never sees a notice. Switch it off on the dashboard (**Check for new versions**, under
+**Stack**), or for good, before the first start, with `MTXUI_UPDATE_CHECK=off` (see
+[Sidecar configuration](config.md)); then the sidecar never asks. Builds that are no release (`edge` images, your
+own builds) do not check at all.
+
+The notice only tells: updating stays with you, as below (the UI cannot update the server itself: it has no access
+to Docker, on purpose).
+
 ## The short version
 
 In the directory with your `compose.yaml` and `.env` (usually `~/mediamtx-ui`):

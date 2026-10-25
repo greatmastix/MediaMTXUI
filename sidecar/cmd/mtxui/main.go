@@ -331,6 +331,7 @@ func start(ctx context.Context, cfg *settings.Settings, log *slog.Logger, logHub
 	go srv.RunRecordings(ctx)
 	go srv.RunHistory(ctx)
 	go srv.RunBackups(ctx)
+	go srv.RunUpdates(ctx) // daily: is there a newer release (MTXUI_UPDATE_CHECK, the dashboard's switch)
 	go c.creds.StartTouches(ctx)
 	go sweep(ctx, sessions, log)
 	listeners := app.Listeners{Public: cfg.Listen, Internal: cfg.InternalListen}

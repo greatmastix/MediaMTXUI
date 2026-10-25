@@ -50,6 +50,7 @@ type Settings struct {
 	ExportMaxBytes          int64
 	ExportConcurrency       int
 	HoldingMaxBytes         int64
+	UpdateCheck             bool
 	// Passkeys: offered when the UI has a secure origin (HTTPS, or localhost); "on" forces them (a test stack whose
 	// browser treats its plain-HTTP origin as secure), "off" hides them.
 	Passkeys bool
@@ -111,6 +112,7 @@ var Vars = []Var{
 	{Name: "MTXUI_EXPORT_MAX_GB", Default: "8", Description: "Largest recording export in GB: the download stops there."},
 	{Name: "MTXUI_EXPORT_CONCURRENCY", Default: "2", Description: "Recording exports running at once (1 to 16); more are refused until one ends. An export holds its slot at most twice its range plus a minute, however slowly the client reads."},
 	{Name: "MTXUI_HOLDING_MAX_GB", Default: "3.9", Description: "Largest holding clip a stream may upload, in GB (0.01 to 3.9: MediaMTX reads no MP4 of 4 GB or more). The server needs twice that free while it stores one."},
+	{Name: "MTXUI_UPDATE_CHECK", Default: "on", Description: "`on`: once a day the sidecar asks GitHub for the latest release, and admins see when there is a new one (they can switch it off on the dashboard). `off`: it never asks, for servers that must not reach the internet; the dashboard's switch stays off."},
 	{Name: "MTXUI_PASSKEYS", Default: "auto", Description: "Passkeys (WebAuthn sign-in): `auto` offers them when MTXUI_PUBLIC_URL is HTTPS or localhost (browsers allow them only there; the relying party is its host), `on` (needs a domain name or localhost there, not an IP address) or `off`."},
 	{Name: "MTXUI_MEDIAMTX_BIN", Default: "/usr/libexec/mtxui/mediamtx", Description: "The MediaMTX binary the image carries, used only to run `--validate-conf` on every config before it is written."},
 	{Name: "MTXUI_MEDIAMTX_LOG_MAX_MB", Default: "20", Description: "MediaMTX's log file is rotated (copy-truncate, gzipped) when it grows past this many MB (1 to 1024)."},
@@ -154,6 +156,7 @@ func Load(getenv func(string) string) (*Settings, error) {
 		ExportMaxBytes:          p.gigabytes("MTXUI_EXPORT_MAX_GB"),
 		ExportConcurrency:       p.integer("MTXUI_EXPORT_CONCURRENCY", 1, 16),
 		HoldingMaxBytes:         p.holdingBytes("MTXUI_HOLDING_MAX_GB"),
+		UpdateCheck:             p.oneOf("MTXUI_UPDATE_CHECK", "on", "off") == "on",
 		MediaMTXLogMaxBytes:     int64(p.integer("MTXUI_MEDIAMTX_LOG_MAX_MB", 1, 1024)) << 20,
 		MediaMTXLogKeep:         p.integer("MTXUI_MEDIAMTX_LOG_KEEP", 0, 50),
 		HistoryDays:             p.integer("MTXUI_HISTORY_DAYS", 1, 365),
