@@ -1,5 +1,5 @@
 {
-  "version": "1.21.2",
+  "version": "1.21.3",
   "global": [
     {
       "key": "logLevel",
@@ -1035,7 +1035,7 @@
       "key": "recordPath",
       "section": "Record",
       "type": "string",
-      "default": "./recordings/%path/%Y-%m-%d_%H-%M-%S-%f",
+      "default": "./recordings/%path/%Y-%m-%d_%H-%M-%S-%f_%z",
       "description": "Path of recording segments.\nExtension is added automatically.\nAvailable variables are %path (path name), %Y %m %d (year, month, day),\n%H %M %S (hours, minutes, seconds), %f (microseconds), %z (time zone), %s (unix epoch)."
     },
     {

@@ -118,6 +118,9 @@ components:
         - moqt-17
         - moqt-18
         - moqt-19
+        - moqt-20
+        - moqt-21
+        - moqt-22
 
     OKStatus:
       type: string
@@ -806,6 +809,9 @@ components:
       properties:
         created:
           type: string
+        expiresAt:
+          type: string
+          nullable: true
         id:
           type: string
           format: uuid
@@ -847,11 +853,79 @@ components:
         version:
           type: string
 
+    InternalUser:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        ips:
+          type: array
+          items:
+            type: string
+        pass:
+          type: string
+        permissions:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthInternalUserPermission"
+        pos:
+          type: integer
+          format: int64
+        user:
+          type: string
+
+    InternalUserList:
+      type: object
+      properties:
+        itemCount:
+          type: integer
+          format: int64
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/InternalUser"
+        pageCount:
+          type: integer
+          format: int64
+
+    InternalUserAddRes:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/OKStatus"
+
+    OptionalAuthInternalUser:
+      type: object
+      properties:
+        ips:
+          type: array
+          nullable: true
+          items:
+            type: string
+        pass:
+          type: string
+          nullable: true
+        permissions:
+          type: array
+          nullable: true
+          items:
+            $ref: "#/components/schemas/AuthInternalUserPermission"
+        user:
+          type: string
+          nullable: true
+
     MoQSession:
       type: object
       properties:
         created:
           type: string
+        expiresAt:
+          type: string
+          nullable: true
         id:
           type: string
           format: uuid
@@ -870,6 +944,8 @@ components:
         state:
           $ref: "#/components/schemas/MoQSessionState"
         transport:
+          type: string
+        user:
           type: string
         userAgent:
           type: string
@@ -1878,6 +1954,11 @@ components:
     RecordingSegment:
       type: object
       properties:
+        duration:
+          type: number
+          format: double
+          description: Duration in seconds. Null when unavailable or when the format is MPEG-TS.
+          nullable: true
         start:
           type: string
 
@@ -1895,6 +1976,9 @@ components:
           deprecated: true
         created:
           type: string
+        expiresAt:
+          type: string
+          nullable: true
         id:
           type: string
           format: uuid
@@ -1998,6 +2082,9 @@ components:
             format: uuid
         created:
           type: string
+        expiresAt:
+          type: string
+          nullable: true
         id:
           type: string
           format: uuid
@@ -2171,6 +2258,9 @@ components:
           description: Same as packetsSentUnique, but expressed in bytes, including payload and all the headers (IP, TCP, SRT)
         created:
           type: string
+        expiresAt:
+          type: string
+          nullable: true
         id:
           type: string
           format: uuid
@@ -2716,6 +2806,9 @@ components:
           deprecated: true
         created:
           type: string
+        expiresAt:
+          type: string
+          nullable: true
         id:
           type: string
           format: uuid
@@ -2953,6 +3046,205 @@ paths:
                 $ref: "#/components/schemas/Error"
         "500":
           description: server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v3/config/internal-users/list:
+    get:
+      operationId: configInternalUsersList
+      tags: [Configuration]
+      summary: returns all internal users with runtime IDs and one-based positions.
+      parameters:
+        - name: page
+          in: query
+          description: page number.
+          schema:
+            type: integer
+            default: 0
+        - name: itemsPerPage
+          in: query
+          description: items per page.
+          schema:
+            type: integer
+            default: 100
+      responses:
+        "200":
+          description: the request was successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InternalUserList"
+        "400":
+          description: invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v3/config/internal-users/get/{id}:
+    get:
+      operationId: configInternalUsersGet
+      tags: [Configuration]
+      summary: returns an internal user.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: the request was successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InternalUser"
+        "400":
+          description: invalid ID.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: user not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v3/config/internal-users/add:
+    post:
+      operationId: configInternalUsersAdd
+      tags: [Configuration]
+      summary: appends an internal user and returns its runtime ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthInternalUser"
+      responses:
+        "200":
+          description: the user was added.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InternalUserAddRes"
+        "400":
+          description: invalid request or configuration.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v3/config/internal-users/patch/{id}:
+    patch:
+      operationId: configInternalUsersPatch
+      tags: [Configuration]
+      summary: patches an internal user without changing its runtime ID.
+      description: All fields are optional. A redacted password retains the previous password.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OptionalAuthInternalUser"
+      responses:
+        "200":
+          description: the request was successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OK"
+        "400":
+          description: invalid request or configuration.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: user not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v3/config/internal-users/replace/{id}:
+    post:
+      operationId: configInternalUsersReplace
+      tags: [Configuration]
+      summary: replaces an internal user without changing its runtime ID.
+      description: Missing fields reset to their zero values. A redacted password retains the previous password.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthInternalUser"
+      responses:
+        "200":
+          description: the request was successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OK"
+        "400":
+          description: invalid request or configuration.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: user not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v3/config/internal-users/delete/{id}:
+    delete:
+      operationId: configInternalUsersDelete
+      tags: [Configuration]
+      summary: deletes an internal user.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: the request was successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OK"
+        "400":
+          description: invalid ID.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: user not found.
           content:
             application/json:
               schema:

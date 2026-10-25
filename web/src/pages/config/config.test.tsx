@@ -41,6 +41,10 @@ describe('global settings', () => {
     await user.type(logLevel, 'debug')
     await user.selectOptions(screen.getByLabelText('rtsp'), 'no')
     expect(screen.getByTestId('unsaved')).toHaveTextContent('2 unsaved changes')
+    // A new logLevel restarts every server, and debug level puts every connection's key into MediaMTX's log file.
+    expect(screen.getByTestId('impact')).toHaveTextContent(
+      /^Saving restarts the RTSP, RTMP, HLS, WebRTC, SRT, MoQ servers.*At debug level MediaMTX writes the stream key or guest key of every connection into its log file/,
+    )
     await user.click(screen.getByRole('button', { name: 'Save' }))
     expect(await screen.findByTestId('saved-note')).toHaveTextContent('Saved as version 2.')
     const patch = calls.find((c) => c.method === 'PATCH')

@@ -32,14 +32,17 @@ func TestSegmentFile(t *testing.T) {
 	utc := listed(t, "2026-10-01T12:00:00.123456Z")
 	berlin := listed(t, "2026-10-01T14:00:00.123456+02:00") // MediaMTX running in another time zone
 	seed := DefaultRecordPath
+	oldSeed := "/recordings/%path/%Y-%m-%d_%H-%M-%S-%f" // installs set up before MediaMTX 1.21.3 keep this one
 	for _, c := range []struct {
 		recordPath string
 		start      time.Time
 		want       string // "": not on the recordings volume
 	}{
-		{seed + ".mp4", utc, "live/cam/2026-10-01_12-00-00-123456.mp4"},
-		{seed + ".ts", utc, "live/cam/2026-10-01_12-00-00-123456.ts"},
-		{seed + ".mp4", berlin, "live/cam/2026-10-01_14-00-00-123456.mp4"},
+		{seed + ".mp4", utc, "live/cam/2026-10-01_12-00-00-123456_Z.mp4"},
+		{seed + ".ts", utc, "live/cam/2026-10-01_12-00-00-123456_Z.ts"},
+		{seed + ".mp4", berlin, "live/cam/2026-10-01_14-00-00-123456_+0200.mp4"},
+		{oldSeed + ".mp4", utc, "live/cam/2026-10-01_12-00-00-123456.mp4"},
+		{oldSeed + ".mp4", berlin, "live/cam/2026-10-01_14-00-00-123456.mp4"},
 		{"/recordings/archive/%path/%Y-%m-%d_%H-%M-%S-%f.mp4", utc, "archive/live/cam/2026-10-01_12-00-00-123456.mp4"},
 		{"/recordings/%path/%Y/%m/%d/%H-%M-%S.mp4", utc, "live/cam/2026/10/01/12-00-00.mp4"},
 		{"/recordings/%path_%Y-%m-%d_%H-%M-%S.mp4", utc, "live/cam_2026-10-01_12-00-00.mp4"},
@@ -65,7 +68,7 @@ func TestSizes(t *testing.T) {
 	u := Usage{Files: map[string]int64{
 		"archive/live/cam/2026-10-01_12-00-00-000000.mp4": 1000,
 		"archive/live/cam/2026-10-01_12-01-00-000000.mp4": 2000,
-		"other/2026-10-01_12-00-00-000000.ts":             300,  // a path that records MPEG-TS
+		"other/2026-10-01_12-00-00-000000_Z.ts":           300,  // a path that records MPEG-TS, under the seed's recordPath
 		"live/cam/2026-10-01_11-00-00-000000.mp4":         5000, // under an earlier recordPath: MediaMTX does not list it
 	}, Bytes: 8300}
 	segs := []Segment{
@@ -98,7 +101,8 @@ func TestSegmentFileWithMediaMTX(t *testing.T) {
 		name, recordPath string
 		start            time.Time
 	}{
-		{"live/cam", root + "/%path/%Y-%m-%d_%H-%M-%S-%f", micro}, // the seed's
+		{"live/cam", root + "/%path/%Y-%m-%d_%H-%M-%S-%f_%z", micro}, // the seed's
+		{"older", root + "/%path/%Y-%m-%d_%H-%M-%S-%f", micro},       // the seed's before MediaMTX 1.21.3
 		{"archived", root + "/archive/%path/%Y/%m/%d/%H-%M-%S-%f", micro},
 		{"flat", root + "/%path_%s", whole},
 		{"zoned", root + "/%path/%Y-%m-%dT%H-%M-%S%z", whole},

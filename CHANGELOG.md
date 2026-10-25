@@ -13,10 +13,33 @@ any add-on file you use, such as `compose.lan.yaml`), then `docker compose pull 
 - **Admins can set a password** for anyone on **People** (Edit, then Set password), including people invited but
   not joined yet. The usual password rules do not apply; it signs the person out everywhere and is audited. See
   [Setting a password](docs/people.md#setting-a-password).
+- **Guest keys end to the second.** MediaMTX is told a guest key's expiry when the key is used and ends the
+  connection itself at that moment; the sidecar's own check stays as a second line.
 
 ### Changed
 
+- **MediaMTX 1.21.3.** Among its fixes: adding, removing or disabling one forward no longer restarts a stream's other
+  forwards; recordings are deleted on time even when the configuration changes often; recordings keep their right
+  length after packet loss; holding screens accept 7.1 AAC encoders.
+- New installs name recording files with their time zone (`%z`, as MediaMTX does by default now). Existing installs
+  keep their names, so their recordings stay listed; MediaMTX's new warning about it is harmless (see
+  [Troubleshooting](docs/troubleshooting.md#harmless-warnings-in-mediamtxs-log)).
 - Release notes come from this file: a release cannot be published without its section here.
+
+### Fixed
+
+- Saving a new `logLevel` now warns that it restarts all of MediaMTX's servers (it always did, so encoders and
+  viewers drop for a moment); the settings page said it interrupted nothing.
+
+### Security
+
+- **Keys stay out of the log viewer at debug level.** With `logLevel: debug`, MediaMTX 1.21.3 writes the stream key or
+  guest key of every connection into its log file. The log viewer, its live view and the download hide them, and the
+  settings page and the Logs page warn while debug is on. See [Logs](docs/logs-and-audit.md#mediamtxs-log-level-and-rotation).
+- The four HTTP/2 advisories tolerated for MediaMTX 1.21.2's binary are fixed in 1.21.3.
+- **Go 1.27.3** for the sidecar: Go's certificate checks distrust compromised intermediate certificates.
+- zod 4.6.7 in the web app: validating an oversized list could exhaust the browser tab's memory. Vite, Vitest and the
+  shadcn tool, used only to build and test, are updated past their advisories too.
 
 ## [1.3.0] - 2026-10-12
 

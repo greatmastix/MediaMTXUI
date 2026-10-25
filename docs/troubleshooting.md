@@ -36,6 +36,7 @@ For MediaMTX's own log, use `mediamtx` instead of `sidecar`. Once you can sign i
 - [A container keeps restarting](#a-container-keeps-restarting)
 - [Warnings at the top of the page](#warnings-at-the-top-of-the-page)
 - [Lost password or authenticator](#lost-password-or-authenticator)
+- [Harmless warnings in MediaMTX's log](#harmless-warnings-in-mediamtxs-log)
 - [Reporting a problem](#reporting-a-problem)
 
 ## The site does not load
@@ -339,6 +340,15 @@ restarting the sidecar (`docker compose restart sidecar`) also clears them.
 Restoring a backup does not help with a lost password: it brings back the same accounts and passwords.
 
 More about accounts, second factors and passkeys: [People and access](people.md).
+
+## Harmless warnings in MediaMTX's log
+
+**`recordPath without '%z' causes segments to be overwritten or placed at wrong time during daylight saving time
+switches`**: MediaMTX 1.21.3 and later warn about every recording stream whose recording file names have no time zone.
+Installs set up before MediaMTX UI moved to MediaMTX 1.21.3 name them that way. It does no harm here: MediaMTX runs in UTC in its
+container, which has no daylight saving time. Do not add `%z` to `recordPath` to silence it: MediaMTX would then no
+longer list the recordings made before, so they would vanish from the **Recordings** page (the files stay on the
+disk). New installs have `%z` in `recordPath` from the start and do not show the warning.
 
 ## Reporting a problem
 

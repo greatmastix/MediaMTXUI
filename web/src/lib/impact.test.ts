@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { applyEvent, initialState } from '@/live/store'
 import { snapshot } from '@/test/fakeEventSource'
 
-import { globalImpact, pathImpact } from './impact'
+import { debugLogWarning, globalImpact, logLevelImpact, pathImpact } from './impact'
 
 const lists = applyEvent(
   initialState,
@@ -22,7 +22,10 @@ const lists = applyEvent(
 
 describe('impact', () => {
   it('names the servers a change restarts and the clients they drop', () => {
-    expect(globalImpact(['logLevel'], lists)).toBeNull()
+    expect(globalImpact(['logStructured'], lists)).toBeNull()
+    expect(globalImpact(['logLevel'], lists)).toBe(
+      'Saving restarts the RTSP, RTMP, HLS, WebRTC, SRT, MoQ servers: 3 clients will drop and have to reconnect.',
+    )
     expect(globalImpact(['rtmpAddress'], lists)).toBe(
       'Saving restarts the RTMP server: 1 client will drop and have to reconnect.',
     )
@@ -35,6 +38,12 @@ describe('impact', () => {
     expect(globalImpact(['readTimeout'], lists)).toMatch(
       /^Saving restarts the RTSP, RTMP, HLS, WebRTC, SRT, MoQ servers: 3 clients/,
     )
+  })
+
+  it('warns when logLevel goes to debug', () => {
+    expect(logLevelImpact({ logLevel: 'debug' })).toBe(debugLogWarning)
+    expect(logLevelImpact({ logLevel: 'info' })).toBeNull()
+    expect(logLevelImpact({ readTimeout: '15s' })).toBeNull()
   })
 
   it('warns about online paths only', () => {

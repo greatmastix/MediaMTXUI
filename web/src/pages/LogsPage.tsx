@@ -11,10 +11,12 @@ import {
   type LogFilter,
   type LogLine,
 } from '@/api/logs'
+import { configQuery } from '@/api/config'
 import { sessionQuery } from '@/api/sidecar'
 import { fieldClass } from '@/components/config/SettingsForm'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button, buttonVariants } from '@/components/ui/button'
+import { debugLogWarning } from '@/lib/impact'
 import { atLeast } from '@/lib/roles'
 import { cn } from '@/lib/utils'
 
@@ -81,6 +83,8 @@ export function LogsPage() {
   const tail = useLogTail(filter, admin && live)
   const search = useQuery({ ...logSearchQuery(filter), enabled: admin && !live })
   const lines = live ? tail.lines : numbered(search.data?.lines ?? [])
+  const config = useQuery({ ...configQuery, enabled: admin })
+  const debug = config.data?.settings?.logLevel === 'debug'
 
   if (!admin) {
     return (
@@ -101,6 +105,11 @@ export function LogsPage() {
           lines. Times are yours.
         </p>
       </div>
+      {debug && (
+        <Alert data-testid="debug-log-warning">
+          <AlertDescription>MediaMTX logs at debug level. {debugLogWarning}</AlertDescription>
+        </Alert>
+      )}
       <form
         className="flex flex-wrap items-end gap-3 rounded-xl border bg-card p-4"
         aria-label="Filter"

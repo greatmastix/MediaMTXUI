@@ -87,7 +87,7 @@ moq: no
 # Path defaults
 
 pathDefaults:
-  recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f_%z
   recordDeleteAfter: 168h
 
 ###############################################

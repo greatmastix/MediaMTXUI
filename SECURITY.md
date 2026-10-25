@@ -60,5 +60,8 @@ These are known and need no report.
   log format a line break in that text starts what looks like a new line, so the log viewer can show a line MediaMTX
   did not write; characters that do not print are shown escaped, and the sidecar never acts on such text. With
   `logStructured: yes` (Configuration → YAML) MediaMTX quotes every message, and the viewer reads that format too.
+- At `logLevel: debug` (MediaMTX 1.21.3 and later), MediaMTX logs the requests it sends to the sidecar to check each
+  connection's credentials, body included, so its log file on the server holds stream keys and guest keys in clear.
+  The log viewer, its live view and the download show them as `<redacted>`, and the UI warns while debug is on.
 - Because the WHIP and WHEP endpoints send no CORS headers, a web player on another site cannot use them; watch
   links and the UI's own player work.

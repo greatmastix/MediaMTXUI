@@ -19,7 +19,9 @@ import (
 const Mount = "/recordings"
 
 // DefaultRecordPath is MediaMTX's recordPath when mediamtx.yml sets none: ./recordings/..., run from / in its image.
-const DefaultRecordPath = Mount + "/%path/%Y-%m-%d_%H-%M-%S-%f"
+// It has the time zone (%z) since MediaMTX 1.21.3, as the seed has since; installs set up before keep the seed's
+// old recordPath, without it, in their mediamtx.yml.
+const DefaultRecordPath = Mount + "/%path/%Y-%m-%d_%H-%M-%S-%f_%z"
 
 // Usage is one measurement.
 type Usage struct {

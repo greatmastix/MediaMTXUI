@@ -27,7 +27,12 @@ type fakeRecordings struct {
 	deleted []string // path@start
 }
 
-func segName(t time.Time) string { return t.UTC().Format("2006-01-02_15-04-05-000000") + ".mp4" }
+// segLayout names segment files as the seed's recordPath does (%z is Z in UTC); oldSegName as the seed's did before
+// MediaMTX 1.21.3, without the time zone, as installs set up before still do.
+const segLayout = "2006-01-02_15-04-05-000000_Z0700"
+
+func segName(t time.Time) string    { return t.UTC().Format(segLayout) + ".mp4" }
+func oldSegName(t time.Time) string { return t.UTC().Format("2006-01-02_15-04-05-000000") + ".mp4" }
 
 func (f *fakeRecordings) add(path string, start time.Time, size int) {
 	f.t.Helper()
@@ -53,7 +58,7 @@ func (f *fakeRecordings) listing() string {
 		sort.Strings(files)
 		var segs []string
 		for _, file := range files {
-			start, _ := time.Parse("2006-01-02_15-04-05-000000", strings.TrimSuffix(filepath.Base(file), ".mp4"))
+			start, _ := time.Parse(segLayout, strings.TrimSuffix(filepath.Base(file), ".mp4"))
 			segs = append(segs, fmt.Sprintf(`{"start":%q}`, start.Format(time.RFC3339Nano)))
 		}
 		rel, _ := filepath.Rel(f.root, d)

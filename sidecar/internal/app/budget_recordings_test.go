@@ -97,7 +97,7 @@ func (f *layoutRecordings) pruned() string {
 func TestRecordingsBudgetBySize(t *testing.T) {
 	base := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
 	at := func(minute int) time.Time { return base.Add(time.Duration(minute) * time.Minute) }
-	archive := "/recordings/archive/%path/%Y-%m-%d_%H-%M-%S-%f"
+	archive := "/recordings/archive/%path/%Y-%m-%d_%H-%M-%S-%f" // without %z, as the seed's was before MediaMTX 1.21.3
 	for _, c := range []struct {
 		name       string
 		recordPath string // live/cam's own, or "" for the seed's
@@ -125,15 +125,15 @@ func TestRecordingsBudgetBySize(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			h, _ := recordingsHarness(t, nil)
 			f := newLayoutRecordings(t, h)
-			dir := "live/cam/"
+			dir, name := "live/cam/", segName
 			if c.recordPath != "" {
 				if rec := h.do("PUT", "/api/v1/config/paths/live/cam", map[string]any{"config": map[string]any{"recordPath": c.recordPath}}); rec.Code != http.StatusOK {
 					t.Fatalf("recordPath: %d %s", rec.Code, rec.Body)
 				}
-				dir = "archive/live/cam/"
+				dir, name = "archive/live/cam/", oldSegName
 			}
 			for i := range 6 {
-				f.add("live/cam", dir+segName(at(i)), at(i), 1000)
+				f.add("live/cam", dir+name(at(i)), at(i), 1000)
 			}
 			if c.unlisted > 0 {
 				f.add("", "old-layout/live/cam/"+segName(at(-60)), at(-60), c.unlisted)

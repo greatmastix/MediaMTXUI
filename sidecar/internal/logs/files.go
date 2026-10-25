@@ -175,7 +175,8 @@ func RunRotation(ctx context.Context, path string, maxBytes int64, keep int, eve
 	}
 }
 
-// Copy writes a log file's content to w, decompressing a rotated copy.
+// Copy writes a log file's content to w, decompressing a rotated copy, with the secrets of MediaMTX's auth requests
+// blanked (Redact).
 func Copy(ctx context.Context, w io.Writer, name string) error {
 	f, err := os.Open(name)
 	if err != nil {
@@ -191,8 +192,7 @@ func Copy(ctx context.Context, w io.Writer, name string) error {
 		defer z.Close()
 		r = z
 	}
-	_, err = io.Copy(w, ctxReader{ctx, r})
-	return err
+	return copyRedacted(w, ctxReader{ctx, r})
 }
 
 type ctxReader struct {

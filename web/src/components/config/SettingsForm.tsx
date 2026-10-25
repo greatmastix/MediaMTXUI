@@ -28,8 +28,8 @@ interface Props {
   children?: ReactNode
   /** Extra changes from the children, counted and saved with the settings. */
   extraDirty?: number
-  /** What saving the pending changes interrupts, shown in the save bar. */
-  impact?: (changedKeys: string[]) => string | null
+  /** What saving the pending changes interrupts or risks, shown in the save bar. */
+  impact?: (changedKeys: string[], set: Readonly<Record<string, unknown>>) => string | null
 }
 
 /** Every setting of a section, grouped as in MediaMTX's reference config, with a filter and a save bar. */
@@ -65,7 +65,9 @@ export function SettingsForm({
     Object.keys(pending.errors).length +
     extraDirty
   const warning =
-    dirty > 0 && impact ? impact([...Object.keys(pending.set), ...pending.remove]) : null
+    dirty > 0 && impact
+      ? impact([...Object.keys(pending.set), ...pending.remove], pending.set)
+      : null
   const q = filter.trim().toLowerCase()
   const shown = settings.filter(
     (s) =>

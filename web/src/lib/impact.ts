@@ -24,7 +24,10 @@ const servers: Server[] = [
   { label: 'MoQ', owns: (k) => k.startsWith('moq'), clients: ['moqSessions'] },
 ]
 
+// logLevel too: MediaMTX recreates its logger, and every server with it (1.21.2 and 1.21.3, checked 2026-10-25); the
+// other log settings (logDestinations, logFile, logStructured, sysLogPrefix) restart nothing.
 const everyServer = new Set([
+  'logLevel',
   'readTimeout',
   'writeTimeout',
   'writeQueueSize',
@@ -52,6 +55,18 @@ export function globalImpact(changed: readonly string[], lists: Lists): string |
   return clients === 0
     ? `Saving restarts ${what}; nobody is connected to ${hit.length === 1 ? 'it' : 'them'} now.`
     : `Saving restarts ${what}: ${plural(clients, 'client', 'clients')} will drop and have to reconnect.`
+}
+
+/**
+ * At logLevel debug MediaMTX (since 1.21.3) logs every request it makes, body included, and so the stream key, guest
+ * key or viewer ticket of every connection, in clear. The log viewer and its download blank them; the file keeps them.
+ */
+export const debugLogWarning =
+  'At debug level MediaMTX writes the stream key or guest key of every connection into its log file on the server, in clear. The log viewer and its download hide them, but the file keeps them: set it back to info when you are done.'
+
+/** The debug-log warning when these changes set logLevel to debug, else null. */
+export function logLevelImpact(set: Readonly<Record<string, unknown>>): string | null {
+  return set.logLevel === 'debug' ? debugLogWarning : null
 }
 
 /** The same for one path: MediaMTX recreates a path whose settings changed. */

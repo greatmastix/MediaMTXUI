@@ -1,6 +1,6 @@
 import { patchGlobal, patchPathDefaults, describeWrite } from '@/api/config'
 import { SettingsForm } from '@/components/config/SettingsForm'
-import { globalImpact } from '@/lib/impact'
+import { globalImpact, logLevelImpact } from '@/lib/impact'
 import { useLive } from '@/live/useLive'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -20,7 +20,9 @@ export function GlobalSettingsPage() {
         current={global}
         inherited={(s) => s.default}
         locked={config.locked}
-        impact={(keys) => globalImpact(keys, live.lists)}
+        impact={(keys, set) =>
+          [globalImpact(keys, live.lists), logLevelImpact(set)].filter(Boolean).join(' ') || null
+        }
         onSave={async (c) => {
           const res = await patchGlobal(c)
           note(describeWrite(res))

@@ -112,6 +112,114 @@ export interface paths {
         patch: operations["configPathDefaultsPatch"];
         trace?: never;
     };
+    "/v3/config/internal-users/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** returns all internal users with runtime IDs and one-based positions. */
+        get: operations["configInternalUsersList"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v3/config/internal-users/get/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** returns an internal user. */
+        get: operations["configInternalUsersGet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v3/config/internal-users/add": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** appends an internal user and returns its runtime ID. */
+        post: operations["configInternalUsersAdd"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v3/config/internal-users/patch/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * patches an internal user without changing its runtime ID.
+         * @description All fields are optional. A redacted password retains the previous password.
+         */
+        patch: operations["configInternalUsersPatch"];
+        trace?: never;
+    };
+    "/v3/config/internal-users/replace/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * replaces an internal user without changing its runtime ID.
+         * @description Missing fields reset to their zero values. A redacted password retains the previous password.
+         */
+        post: operations["configInternalUsersReplace"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v3/config/internal-users/delete/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** deletes an internal user. */
+        delete: operations["configInternalUsersDelete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v3/config/paths/list": {
         parameters: {
             query?: never;
@@ -899,7 +1007,7 @@ export interface components {
         /** @enum {string} */
         MoQSessionState: "idle" | "read" | "publish";
         /** @enum {string} */
-        MoQVersion: "moqt-16" | "moqt-17" | "moqt-18" | "moqt-19";
+        MoQVersion: "moqt-16" | "moqt-17" | "moqt-18" | "moqt-19" | "moqt-20" | "moqt-21" | "moqt-22";
         /** @enum {string} */
         OKStatus: "ok";
         /** @enum {string} */
@@ -1184,6 +1292,7 @@ export interface components {
         };
         HLSSession: {
             created?: string;
+            expiresAt?: string | null;
             /** Format: uuid */
             id?: string;
             isCDN?: boolean;
@@ -1206,8 +1315,37 @@ export interface components {
             started?: string;
             version?: string;
         };
+        InternalUser: {
+            /** Format: uuid */
+            id?: string;
+            ips?: string[];
+            pass?: string;
+            permissions?: components["schemas"]["AuthInternalUserPermission"][];
+            /** Format: int64 */
+            pos?: number;
+            user?: string;
+        };
+        InternalUserList: {
+            /** Format: int64 */
+            itemCount?: number;
+            items?: components["schemas"]["InternalUser"][];
+            /** Format: int64 */
+            pageCount?: number;
+        };
+        InternalUserAddRes: {
+            /** Format: uuid */
+            id?: string;
+            status?: components["schemas"]["OKStatus"];
+        };
+        OptionalAuthInternalUser: {
+            ips?: string[] | null;
+            pass?: string | null;
+            permissions?: components["schemas"]["AuthInternalUserPermission"][] | null;
+            user?: string | null;
+        };
         MoQSession: {
             created?: string;
+            expiresAt?: string | null;
             /** Format: uuid */
             id?: string;
             /** Format: uint64 */
@@ -1219,6 +1357,7 @@ export interface components {
             remoteAddr?: string;
             state?: components["schemas"]["MoQSessionState"];
             transport?: string;
+            user?: string;
             userAgent?: string;
             version?: components["schemas"]["MoQVersion"];
         };
@@ -1953,6 +2092,11 @@ export interface components {
             pageCount?: number;
         };
         RecordingSegment: {
+            /**
+             * Format: double
+             * @description Duration in seconds. Null when unavailable or when the format is MPEG-TS.
+             */
+            duration?: number | null;
             start?: string;
         };
         RTMPConn: {
@@ -1968,6 +2112,7 @@ export interface components {
              */
             bytesSent?: number;
             created?: string;
+            expiresAt?: string | null;
             /** Format: uuid */
             id?: string;
             /** Format: uint64 */
@@ -2034,6 +2179,7 @@ export interface components {
             bytesSent?: number;
             conns?: string[];
             created?: string;
+            expiresAt?: string | null;
             /** Format: uuid */
             id?: string;
             /** Format: uint64 */
@@ -2198,6 +2344,7 @@ export interface components {
              */
             bytesSentUnique?: number;
             created?: string;
+            expiresAt?: string | null;
             /** Format: uuid */
             id?: string;
             /**
@@ -2777,6 +2924,7 @@ export interface components {
              */
             bytesSent?: number;
             created?: string;
+            expiresAt?: string | null;
             /** Format: uuid */
             id?: string;
             /** Format: uint64 */
@@ -3062,6 +3210,241 @@ export interface operations {
             };
             /** @description server error. */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    configInternalUsersList: {
+        parameters: {
+            query?: {
+                /** @description page number. */
+                page?: number;
+                /** @description items per page. */
+                itemsPerPage?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the request was successful. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InternalUserList"];
+                };
+            };
+            /** @description invalid request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    configInternalUsersGet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the request was successful. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InternalUser"];
+                };
+            };
+            /** @description invalid ID. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description user not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    configInternalUsersAdd: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuthInternalUser"];
+            };
+        };
+        responses: {
+            /** @description the user was added. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InternalUserAddRes"];
+                };
+            };
+            /** @description invalid request or configuration. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    configInternalUsersPatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionalAuthInternalUser"];
+            };
+        };
+        responses: {
+            /** @description the request was successful. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OK"];
+                };
+            };
+            /** @description invalid request or configuration. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description user not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    configInternalUsersReplace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuthInternalUser"];
+            };
+        };
+        responses: {
+            /** @description the request was successful. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OK"];
+                };
+            };
+            /** @description invalid request or configuration. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description user not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    configInternalUsersDelete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the request was successful. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OK"];
+                };
+            };
+            /** @description invalid ID. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description user not found. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

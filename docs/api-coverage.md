@@ -2,7 +2,7 @@
 
 # MediaMTX API coverage
 
-Every operation of the MediaMTX v1.21.2 Control API (`spec/mediamtx/openapi.yaml`, 50 operations) and how this project uses it.
+Every operation of the MediaMTX v1.21.3 Control API (`spec/mediamtx/openapi.yaml`, 56 operations) and how this project uses it.
 **Access** is the minimum UI role for which the sidecar's API proxy forwards the call: `viewer` < `operator` < `admin`.
 `sidecar` operations are called only by the sidecar itself and never proxied for browsers; `unused` ones are never called.
 
@@ -12,7 +12,7 @@ Every operation of the MediaMTX v1.21.2 Control API (`spec/mediamtx/openapi.yaml
 | operator | 32 |
 | admin | 2 |
 | sidecar | 4 |
-| unused | 7 |
+| unused | 13 |
 
 | Operation | Method | Path | Area | Phase | Access | Notes |
 |---|---|---|---|---|---|---|
@@ -22,6 +22,12 @@ Every operation of the MediaMTX v1.21.2 Control API (`spec/mediamtx/openapi.yaml
 | `configGlobalSet` | PATCH | `/v3/config/global/patch` | – | – | unused | Runtime-only; the next file reload discards it (verified). Persistent config goes through the sidecar's file writer. |
 | `configPathDefaultsGet` | GET | `/v3/config/path-defaults/get` | Path defaults | 3 | sidecar | Effective path defaults for apply-and-verify. |
 | `configPathDefaultsPatch` | PATCH | `/v3/config/path-defaults/patch` | – | – | unused | Runtime-only, like configGlobalSet. |
+| `configInternalUsersList` | GET | `/v3/config/internal-users/list` | – | – | unused | authMethod is http, so MediaMTX has no internal users; people and stream keys live in the sidecar. |
+| `configInternalUsersGet` | GET | `/v3/config/internal-users/get/{id}` | – | – | unused | Like configInternalUsersList. |
+| `configInternalUsersAdd` | POST | `/v3/config/internal-users/add` | – | – | unused | Runtime-only, like configGlobalSet; and there are no internal users (configInternalUsersList). |
+| `configInternalUsersPatch` | PATCH | `/v3/config/internal-users/patch/{id}` | – | – | unused | Like configInternalUsersAdd. |
+| `configInternalUsersReplace` | POST | `/v3/config/internal-users/replace/{id}` | – | – | unused | Like configInternalUsersAdd. |
+| `configInternalUsersDelete` | DELETE | `/v3/config/internal-users/delete/{id}` | – | – | unused | Like configInternalUsersAdd. |
 | `configPathsList` | GET | `/v3/config/paths/list` | Paths | 3 | sidecar | Effective path configs; paths present here but not in the file are flagged runtime-only. |
 | `configPathsGet` | GET | `/v3/config/paths/get/{name}` | Paths | 3 | sidecar |  |
 | `configPathsAdd` | POST | `/v3/config/paths/add/{name}` | – | – | unused | Runtime-only, like configGlobalSet. |

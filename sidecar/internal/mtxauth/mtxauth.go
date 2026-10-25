@@ -98,6 +98,11 @@ type Handler struct {
 	// OnPublish, when set, hears of every publish MediaMTX lets through (the log notes name refused encoders only by
 	// address; this ties an address to a path). Set once, before serving.
 	OnPublish func(path string, ip netip.Addr)
+	// EndsAtExpiry reports whether what a credential opens ends when the credential expires (guest keys). MediaMTX
+	// then gets the expiry with the answer and closes the session at that moment itself (since v1.21.3); the sidecar's
+	// own sweep of expired guest keys stays, for older versions and as a second line. Other credentials only stop
+	// opening new sessions when they expire. Set once, before serving.
+	EndsAtExpiry func(ctx context.Context, credentialID int64) bool
 }
 
 // Throttling: failed attempts that carry credentials, per client address (IPv6 per /64). Anonymous probes are not
@@ -122,6 +127,13 @@ type Decision struct {
 	Allow  bool
 	Reason string
 	Who    string // the principal or credential name, for logs
+	// ExpiresAt, when set on an allowed request, is when MediaMTX is to close the session (EndsAtExpiry).
+	ExpiresAt *time.Time
+}
+
+// answer is the body of an allowed request's response that carries an expiry; MediaMTX reads expireAt (RFC 3339).
+type answer struct {
+	ExpireAt time.Time `json:"expireAt"`
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -139,6 +151,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	d := h.Decide(ctx, req)
+	if d.Allow && d.ExpiresAt != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(answer{ExpireAt: d.ExpiresAt.UTC()})
+		return
+	}
 	if d.Allow {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -213,7 +230,11 @@ func (h *Handler) Decide(ctx context.Context, req Request) Decision {
 	if req.Action == "publish" && h.OnPublish != nil {
 		h.OnPublish(req.Path, ip)
 	}
-	return Decision{Allow: true, Who: c.Name}
+	d := Decision{Allow: true, Who: c.Name}
+	if c.ExpiresAt != nil && h.EndsAtExpiry != nil && h.EndsAtExpiry(ctx, c.ID) {
+		d.ExpiresAt = c.ExpiresAt
+	}
+	return d
 }
 
 // lookup follows S1's rules: a non-empty user means user and password (token then only repeats the password);

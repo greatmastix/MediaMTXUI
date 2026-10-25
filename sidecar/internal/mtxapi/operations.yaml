@@ -81,6 +81,37 @@ operations:
     path: /v3/config/paths/delete/{name}
     access: unused
     note: Runtime-only, like configGlobalSet.
+  - id: configInternalUsersList
+    method: GET
+    path: /v3/config/internal-users/list
+    query: [page, itemsPerPage]
+    access: unused
+    note: authMethod is http, so MediaMTX has no internal users; people and stream keys live in the sidecar.
+  - id: configInternalUsersGet
+    method: GET
+    path: /v3/config/internal-users/get/{id}
+    access: unused
+    note: Like configInternalUsersList.
+  - id: configInternalUsersAdd
+    method: POST
+    path: /v3/config/internal-users/add
+    access: unused
+    note: Runtime-only, like configGlobalSet; and there are no internal users (configInternalUsersList).
+  - id: configInternalUsersPatch
+    method: PATCH
+    path: /v3/config/internal-users/patch/{id}
+    access: unused
+    note: Like configInternalUsersAdd.
+  - id: configInternalUsersReplace
+    method: POST
+    path: /v3/config/internal-users/replace/{id}
+    access: unused
+    note: Like configInternalUsersAdd.
+  - id: configInternalUsersDelete
+    method: DELETE
+    path: /v3/config/internal-users/delete/{id}
+    access: unused
+    note: Like configInternalUsersAdd.
 
   - id: hlsMuxersList
     method: GET

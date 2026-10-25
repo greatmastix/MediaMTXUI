@@ -288,8 +288,12 @@ func start(ctx context.Context, cfg *settings.Settings, log *slog.Logger, logHub
 		UI: webui.Handler(), Log: log, Restart: restart,
 	})
 
-	mtxAuth.Public = srv.IsPublicPath                                             // anyone may read a public stream
-	mtxAuth.OnPublish = notes.Publish                                             // ties refused encoders in MediaMTX's log to their stream
+	mtxAuth.Public = srv.IsPublicPath                                 // anyone may read a public stream
+	mtxAuth.OnPublish = notes.Publish                                 // ties refused encoders in MediaMTX's log to their stream
+	mtxAuth.EndsAtExpiry = func(ctx context.Context, id int64) bool { // guest keys end what they opened when they expire
+		guest, err := c.store.IsGuestKey(ctx, id)
+		return err == nil && guest
+	}
 	notes.OnRefused = srv.FollowEncoder                                           // the holding version follows the encoder's audio
 	notes.OnLine = func(line string) { logHub.Publish(logs.ParseMediaMTX(line)) } // the log viewer's live tail
 	go notes.Follow(ctx, cfg.MediaMTXLog(), time.Second)

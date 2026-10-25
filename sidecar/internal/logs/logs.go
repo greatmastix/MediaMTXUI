@@ -71,6 +71,8 @@ var mtxLevels = map[string]string{"DEB": "debug", "INF": "info", "WAR": "warn", 
 // authentication. Characters that do not print are shown escaped ("\r", "\x1b", "\u202e"), so that text cannot
 // change how a line looks. A line break in it cannot be told apart, though: the plain format writes it raw, and the
 // text after it reads as a line of its own, whatever it claims to be. Only the structured format quotes it.
+//
+// The secrets of the auth requests MediaMTX logs at debug level are blanked (Redact).
 func ParseMediaMTX(s string) Line {
 	s = strings.TrimRight(s, "\r\n")
 	l := Line{Source: MediaMTX, Level: "info", Text: s}
@@ -86,7 +88,7 @@ func ParseMediaMTX(s string) Line {
 		}
 		l.Level, l.Text = mtxLevels[m[2]], m[3]
 	}
-	l.Text = printable(l.Text)
+	l.Text = printable(Redact(l.Text))
 	if len(l.Text) > maxText {
 		l.Text = l.Text[:maxText]
 	}

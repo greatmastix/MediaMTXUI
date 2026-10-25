@@ -272,7 +272,8 @@ A guest watch key works with outside players. It does not open the watch link, w
 
 - The valid keys are listed with who they are for, what they allow, **Valid until** a time, who made them and when
   they were last used.
-- When a key expires, whatever it opened is disconnected. A guest stream does not run on past its key.
+- When a key expires, whatever it opened is disconnected, to the second: MediaMTX is told the expiry when the key is
+  used and ends the connection itself. A guest stream does not run on past its key.
 - **Revoke**, then **Revoke now**, ends a key at once and disconnects the guest.
 - The last five expired and revoked keys stay listed under **Expired and revoked**.
 - A stream can have at most 10 valid guest keys at once.

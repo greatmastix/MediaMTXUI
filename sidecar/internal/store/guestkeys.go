@@ -79,6 +79,13 @@ func (s *Store) GuestKey(ctx context.Context, streamID, credentialID int64) (Gue
 	return list[0], nil
 }
 
+// IsGuestKey reports whether a credential is a guest key.
+func (s *Store) IsGuestKey(ctx context.Context, credentialID int64) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM stream_guest_keys WHERE credential_id = ?`, credentialID).Scan(&n)
+	return n > 0, err
+}
+
 // ActiveGuestKeys lists the guest keys of every stream that are neither revoked nor expired at now.
 func (s *Store) ActiveGuestKeys(ctx context.Context, now time.Time) ([]GuestKey, error) {
 	return s.guestKeys(ctx, 10000, `c.revoked_at IS NULL AND (c.expires_at IS NULL OR c.expires_at > ?)`, ms(now))

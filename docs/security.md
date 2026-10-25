@@ -51,8 +51,16 @@ viewer changing settings). An admin can change everything by design; the host an
 - [x] **Taking access away takes effect now.** Disabling, deleting, demoting or signing out someone (a password
   change and "sign out everywhere" included) closes their open live views within seconds; making a stream private or
   deleting it disconnects its anonymous viewers within about 2 s; what a guest key opened is disconnected when the
-  key expires.
-  *Evidence:* the `*_sessions_test.go` tests in internal/app, internal/mtxauth and internal/liveproxy.
+  key expires (by MediaMTX itself, which gets the expiry with the auth answer, and by the sidecar's sweep).
+  *Evidence:* the `*_sessions_test.go` tests in internal/app, internal/mtxauth and internal/liveproxy,
+  `TestGuestKeyExpiryWithMediaMTX`.
+- [x] **Keys stay out of the log viewer.** At `logLevel: debug`, MediaMTX logs its auth requests with their body
+  (stream keys, guest keys, viewer tickets, RTMP query credentials); the viewer, its live view and the download blank
+  `password`, `token` and `query`, in either log format and in lines cut short. The file on disk keeps them, so the
+  save bar and the Logs page warn while debug is on.
+  *Evidence:* `TestRedact`, `TestRedactLeavesNoSecret`, `FuzzRedact`, `TestCopyRedacts`,
+  `TestRedactsMediaMTXDebugLog` (the real MediaMTX, both formats), the e2e test "at debug level, the logs hide the
+  credentials MediaMTX logs".
 
 ### Who may do what
 
@@ -178,9 +186,8 @@ viewer changing settings). An admin can change everything by design; the host an
   modules the image is built with) and MediaMTX's binary; npm audit allows no advisory for a dependency that reaches
   the browser bundle, and none critical for the build tools.
   The audit runs on every push and every week, so a new advisory shows up without a change here.
-  *Evidence:* `./dev audit`. 2026-10-12: govulncheck finds no vulnerability the sidecar's code calls (Go 1.27.2,
-  golang.org/x/net v0.61.0); in MediaMTX 1.21.2's binary, only four it tolerates (below); npm audit finds none in
-  shipped dependencies (one high advisory in a build tool, below).
+  *Evidence:* `./dev audit`. 2026-10-25: govulncheck finds no vulnerability the sidecar's code calls (Go 1.27.3,
+  golang.org/x/net v0.61.0) and none in MediaMTX 1.21.3's binary; npm audit finds none at all.
 - [x] **The image** is `FROM scratch`: the CA bundle, the sidecar's two binaries and MediaMTX's binary, nothing else
   to scan. It is built for amd64, arm64 and armv7 with provenance and an SBOM.
   *Evidence:* `Dockerfile`, `.github/workflows/release.yml`, `./dev audit`.
@@ -224,10 +231,6 @@ Decisions, and limits we accept, so you can judge them for your setup.
   with a second factor set up; MediaMTX's log shows a forward's URL without its credentials and fragment, but with
   a key written into its path; MediaMTX's plain log format lets a client add lines to it; the WHIP and WHEP endpoints
   send no CORS headers.
-- **Four HTTP/2 advisories in MediaMTX 1.21.2's binary**, which only a MediaMTX release can fix: it links
-  golang.org/x/net v0.59.0 (GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6603; fixed in v0.60.0). MediaMTX's
-  HTTP servers are plain HTTP inside the stack, reached only by the sidecar, so HTTP/2 never runs there. `./dev audit`
-  tolerates exactly these, for exactly 1.21.2 (listed with the reason in `dev`); the next MediaMTX is judged afresh.
-- **A build tool's advisory.** `braces` (GHSA-vfj7-8cjw-p6xm, high, no fixed version) is used by the shadcn
-  command-line tool through `fast-glob`, at build time, on the project's own patterns; it never reaches the image or
-  the browser.
+- **MediaMTX's debug log file holds keys.** At `logLevel: debug`, MediaMTX logs its auth requests with their body,
+  stream keys and guest keys included, and only MediaMTX could leave them out. The sidecar hides them wherever it
+  shows the log and warns while debug is on, but the file on the server keeps them until it rotates away.

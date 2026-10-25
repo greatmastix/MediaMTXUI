@@ -295,3 +295,72 @@ test('quick setup re-streams a camera in one step', async ({ page, playwright })
   expect(res.status(), await res.text()).toBe(200)
   await request.dispose()
 })
+
+test('at debug level, the logs hide the credentials MediaMTX logs', async ({
+  page,
+  playwright,
+}) => {
+  test.setTimeout(90_000)
+  const request = await playwright.request.newContext({ baseURL })
+  const csrf = await signIn(request)
+  const headers = { ...sameOrigin, 'X-CSRF-Token': csrf }
+  // Debug level writes every connection's key into MediaMTX's own output, which the stack's logs keep (and ./dev
+  // checks them for the test's secrets): the publisher stays off while it is on. Changing logLevel restarts every
+  // server anyway, so the publisher would reconnect right then.
+  await control('publisher-stop')
+  try {
+    await signInPage(page, '/config/global')
+    const logLevel = page.getByLabel('logLevel', { exact: true })
+    await logLevel.fill('debug')
+    await expect(page.getByTestId('impact')).toContainText(
+      /^Saving restarts the RTSP, RTMP, HLS, WebRTC/,
+    )
+    await expect(page.getByTestId('impact')).toContainText(
+      'At debug level MediaMTX writes the stream key or guest key of every connection into its log file',
+    )
+    await page.getByRole('button', { name: 'Save' }).click()
+    await expect(page.getByTestId('saved-note')).toContainText('Saved as version')
+
+    // MediaMTX posts the credentials of a connection to the sidecar and, at debug level, logs that request whole.
+    const secret = `S3CR3T${String(Date.now())}`
+    const probe = 'e2e-debug-probe'
+    const res = await request.get('http://mediamtx:8888/test/index.m3u8', {
+      headers: { Authorization: 'Basic ' + Buffer.from(`${probe}:${secret}`).toString('base64') },
+    })
+    expect(res.status()).toBe(401)
+
+    const body = `"user":"${probe}","password":"<redacted>","token":"<redacted>"`
+    await expect
+      .poll(async () => {
+        const r = await request.get(`/api/v1/logs?source=mediamtx&q=${probe}&limit=2000`)
+        return JSON.stringify(await r.json())
+      })
+      .toContain(body.replaceAll('"', '\\"'))
+    const download = await (await request.get('/api/v1/logs/download')).text()
+    expect(download).toContain(body)
+    expect(download).not.toContain(secret)
+
+    await page.goto('/logs')
+    await expect(page.getByTestId('debug-log-warning')).toContainText(
+      'MediaMTX logs at debug level.',
+    )
+    await page.getByRole('button', { name: 'Stop following' }).click()
+    await page.getByLabel('Containing').fill(probe)
+    await page.getByRole('button', { name: 'Show' }).click()
+    const lines = page.getByTestId('log-line')
+    await expect(lines.filter({ hasText: body }).first()).toBeVisible()
+    await expect(page.locator('body')).not.toContainText(secret)
+  } finally {
+    const res = await request.patch('/api/v1/config/global', {
+      headers,
+      data: { set: { logLevel: 'info' } },
+    })
+    expect(res.status(), await res.text()).toBe(200)
+    await control('publisher-start')
+    await expect.poll(() => publisherSession(request), { timeout: 60_000 }).toBeTruthy()
+    await request.dispose()
+  }
+  await page.goto('/logs')
+  await expect(page.getByTestId('log-state')).toBeVisible()
+  await expect(page.getByTestId('debug-log-warning')).toHaveCount(0)
+})

@@ -40,7 +40,16 @@ Close some tabs."
 ### MediaMTX's log level and rotation
 
 MediaMTX logs at `info` by default. For more detail while you track down a problem, set `logLevel` to `debug` under
-**Configuration → Global settings** (and back to `info` afterwards: debug is very chatty).
+**Configuration → Global settings** (and back to `info` afterwards: debug is very chatty). Changing the level
+restarts all of MediaMTX's servers, so connected encoders and viewers drop for a moment and reconnect; do it when
+nobody is live.
+
+> **Debug level writes keys into the log file.** At `debug`, MediaMTX logs every request it makes, and for every
+> connection it asks the sidecar whether the stream key, guest key or viewer ticket is valid. So the file on the server
+> holds those keys in clear. The log viewer, its live view and **Download** hide them (as `<redacted>`), and the Logs
+> page and the save bar warn while debug is on, but the file and its rotated copies keep them until they rotate away.
+> Switch back to `info` when you are done; if anyone else can read the server's files, make new keys for the
+> streams you used meanwhile.
 
 MediaMTX's log file is rotated so it cannot fill the disk: when it grows past 20 MB it is compressed and a fresh one
 started, and the 5 newest old copies are kept. The search reads them all. Change this with
