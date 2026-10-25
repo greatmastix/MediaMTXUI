@@ -23,6 +23,9 @@ Checks
   lint                  golangci-lint, eslint, prettier, tsc, shellcheck, compose and pin consistency
   fmt                   format Go and web sources in place
   test [pkg...]         Go tests (with -race) and Vitest; with Go packages, only those
+  test --quick [pkg...] for iterating: Go tests without -race and with -short (no MediaMTX processes, no waiting out
+                        deadlines), rerunning only the packages that changed (Go's test cache), and Vitest only if
+                        web/ changed since it last passed; ./dev test and ./dev ci run everything
   gen                   regenerate web/src/api/mediamtx-openapi.d.ts and mediamtx-settings.json, docs/api-coverage.md
                         and docs/config.md
   gen-check             fail if the vendored spec or any generated file drifted
@@ -34,8 +37,10 @@ Dev stack (project mtxdev, published on 127.0.0.1:18xxx only)
   check                 check that path "test" is ready, through the sidecar's API proxy
   logs [service...]     follow logs
   down                  stop and remove the stack (containers, network, volumes)
-  e2e [--slow] [args]   run Playwright against a throwaway stack (project mtxe2e, nothing published), e.g.
-                        ./dev e2e tests/watch.spec.ts; the stack's logs are kept in .cache/e2e-logs.
+  e2e [--slow] [--only spec,...] [args]
+                        run Playwright against a throwaway stack (project mtxe2e, nothing published); the stack's
+                        logs are kept in .cache/e2e-logs. --only watch,auth runs just those specs after setup (a
+                        file argument such as tests/watch.spec.ts also runs every spec a full run has before it);
                         --slow adds the tests tagged @slow; SOAK_MINUTES=10 ./dev e2e tests/soak.spec.ts runs the
                         9-tile soak test
 
@@ -239,23 +244,59 @@ pins_check() {
   echo "pins ok"
 }
 
-test_go() {
+# go_test ARGS...: go test with the pinned MediaMTX binary and reference config for the integration tests.
+go_test() {
   mediamtx_bin
   go_ env MTXUI_TEST_MEDIAMTX_BIN="/cache/mediamtx/$MEDIAMTX_VERSION/mediamtx" \
     MTXUI_TEST_MEDIAMTX_REFERENCE="/cache/mediamtx/$MEDIAMTX_VERSION/mediamtx.yml" \
-    MTXUI_TEST_MEDIAMTX_VERSION="$MEDIAMTX_VERSION" go test -race -count=1 "${@:-./...}"
+    MTXUI_TEST_MEDIAMTX_VERSION="$MEDIAMTX_VERSION" go test "$@"
 }
+test_go() { go_test -race -count=1 "${@:-./...}"; }
+# ./dev test --quick, for iterating: no race detector (it makes the SQLite driver about 14 times slower, and with it
+# every test that opens a store), -short (no MediaMTX processes, no waiting out deadlines, fewer random sequences),
+# and Go's test cache, which reruns only the packages whose code, dependencies or inputs changed.
+test_go_quick() { go_test -short "${@:-./...}"; }
 test_web() { node_ npm test --silent; }
+# The web half of ./dev test --quick: Vitest, unless it passed on exactly these files before (Go's test cache, by hand).
+test_web_quick() {
+  local sum stamp=$CACHE/web-tests.sha256
+  sum=$(web_sum) || {
+    test_web
+    return
+  }
+  if [[ -f $stamp && $(<"$stamp") == "$sum" ]]; then
+    echo "web tests passed on these files before (./dev test runs them anyway)"
+    return
+  fi
+  test_web || return
+  echo "$sum" >"$stamp"
+}
+
+# web_sum: a hash of what the web tests depend on: the Node image and every file under web/ that git tracks or would
+# add (not node_modules or build output), with its path. Fails outside a git checkout.
+web_sum() {
+  local files
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  files=$(git ls-files --cached --others --exclude-standard -- web | while IFS= read -r f; do
+    if [[ -f $f ]]; then echo "$f"; fi # not one deleted from the working tree
+  done)
+  { echo "$NODE_IMAGE"; echo "$files"; git hash-object --stdin-paths <<<"$files"; } | sha256
+}
 
 cmd_test() {
+  local go=test_go web=test_web
+  if [[ ${1:-} == --quick ]]; then
+    go=test_go_quick web=test_web_quick
+    shift
+  fi
   cmd_deps
   if [[ $# -gt 0 ]]; then
     step "test: go"
-    test_go "$@"
+    $go "$@"
     return
   fi
   mediamtx_bin # once, before the jobs that use it
-  parallel "test: go=test_go" "test: web=test_web"
+  parallel "test: go=$go" "test: web=$web"
 }
 
 cmd_gen() {
@@ -569,11 +610,29 @@ pebble_ca() {
 }
 
 cmd_e2e() {
-  local token
-  if [[ ${1:-} == --slow ]]; then # also the tests tagged @slow (waiting out MediaMTX's own timeouts)
-    export E2E_SLOW=1
+  local token name names chosen
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --slow) export E2E_SLOW=1 ;; # also the tests tagged @slow (waiting out MediaMTX's own timeouts)
+      --only) # only these specs, after setup (E2E_ONLY in e2e/playwright.config.ts)
+        [[ -n ${2:-} ]] || die "--only needs spec names, e.g. --only watch,auth"
+        IFS=, read -ra names <<<"$2"
+        E2E_ONLY=
+        for name in "${names[@]}"; do
+          name=${name#tests/}
+          name=${name%.spec.ts}
+          [[ -f e2e/tests/$name.spec.ts ]] || die "no e2e spec e2e/tests/$name.spec.ts"
+          E2E_ONLY+=${E2E_ONLY:+,}$name
+        done
+        export E2E_ONLY
+        shift
+        ;;
+      *) break ;;
+    esac
     shift
-  fi
+  done
+  chosen=$# # specs or other Playwright arguments
+  [[ -n ${E2E_ONLY:-} ]] && chosen=1
   trap e2e_teardown EXIT
   step "e2e: stack $E2E_PROJECT (uid 10002, read-only, named volumes, nothing published)"
   pebble_ca
@@ -595,7 +654,7 @@ cmd_e2e() {
   for s in sidecar mediamtx sidecar-acme; do docker logs "$E2E_PROJECT-$s-1" >"$CACHE/e2e-logs/$s.log" 2>&1 || true; done
   ((rc == 0)) || die "playwright failed (logs in .cache/e2e-logs)"
   step "e2e: no secret in the logs"
-  check_logged_secrets $#
+  check_logged_secrets "$chosen"
   step "e2e: state files"
   check_state_files
 }

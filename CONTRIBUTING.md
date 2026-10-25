@@ -18,7 +18,15 @@ container pinned by digest in `deploy/tools.env`.
 publisher on path `test`; `./dev up --wizard` leaves setup to the web wizard instead. On a remote machine, tunnel the
 ports first: `ssh -L 18080:127.0.0.1:18080 -L 18173:127.0.0.1:18173 <host>`.
 
-Before sending a change:
+While working on a change, the quick tier:
+
+```bash
+./dev test --quick       # Go tests without -race and with -short, rerunning only the packages that changed; the
+                         # web tests only if web/ changed since they last passed
+./dev e2e --only watch   # just these specs (comma-separated) after setup, without the rest of the run
+```
+
+Before sending a change, everything:
 
 ```bash
 ./dev ci            # lint, unit and integration tests, generated files, the image build
@@ -63,8 +71,9 @@ A change that breaks one of these is wrong even when the tests pass.
 ## Conventions
 
 - **Go**: stdlib first, chi, `context.Context` first, errors wrapped with `%w`, table-driven tests run with `-race`,
-  golangci-lint with gofumpt. Integration tests run the real pinned MediaMTX binary. Migrations are forward-only goose
-  files.
+  golangci-lint with gofumpt. Integration tests run the real pinned MediaMTX binary. A test that waits out a
+  deadline or repeats something many times skips or does less under `testing.Short()` (`./dev test --quick`); one
+  that starts MediaMTX through `internal/mtxtest` skips by itself. Migrations are forward-only goose files.
 - **TypeScript**: strict, no `any`; server state in TanStack Query; the sidecar's answers validated with zod; live data
   from the event stream (`useLive()`), not polling; no inline scripts or styles (CSP); keyboard-accessible controls;
   the first page load within the bundle budget (checked by the image build).

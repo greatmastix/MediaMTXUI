@@ -216,6 +216,9 @@ func (b *slowBody) Read(p []byte) (int, error) {
 
 // A clip may take longer to arrive than an ordinary request body (64 MB over a slow uplink).
 func TestHoldingUploadTakesItsTime(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: uploads for longer than bodyReadTimeout")
+	}
 	old := bodyReadTimeout
 	bodyReadTimeout = 300 * time.Millisecond
 	t.Cleanup(func() { bodyReadTimeout = old })

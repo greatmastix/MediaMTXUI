@@ -1,5 +1,6 @@
 // Package mtxtest runs the pinned MediaMTX binary for integration tests. Tests skip unless MTXUI_TEST_MEDIAMTX_BIN
-// points at it; `./dev test` extracts the binary from the pinned image and sets it.
+// points at it; `./dev test` extracts the binary from the pinned image and sets it. With -short (`./dev test --quick`)
+// the tests that start MediaMTX skip; the binary's --validate-conf still runs.
 package mtxtest
 
 import (
@@ -89,8 +90,12 @@ func (i *Instance) Logs() string { return i.logs.String() }
 // Start writes config to a temporary mediamtx.yml and runs MediaMTX until the test ends. It waits until readyPort
 // on 127.0.0.1 accepts connections. A MediaMTX that dies without a word during startup (killed from outside, as on a
 // CI runner short of memory) gets one more try; one that says why it stopped (a config error) fails the test at once.
+// With -short it skips the test.
 func Start(t *testing.T, config string, readyPort int) *Instance {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("starts MediaMTX: not with -short (./dev test runs it)")
+	}
 	inst, silent := start(t, config, readyPort, false)
 	if inst == nil && silent {
 		t.Log("MediaMTX stopped during startup without any output; trying once more")

@@ -13,6 +13,9 @@ import (
 // A client that sends a body slowly is cut off after bodyReadTimeout; a long-lived response without a body (the event
 // stream) is not, and neither is a request whose body arrived in time.
 func TestBodyDeadline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: waits out bodyReadTimeout")
+	}
 	old := bodyReadTimeout
 	bodyReadTimeout = 300 * time.Millisecond
 	t.Cleanup(func() { bodyReadTimeout = old })

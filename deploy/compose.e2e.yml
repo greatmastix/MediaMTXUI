@@ -117,6 +117,7 @@ services:
       ADMIN_PASSWORD: ${DEV_ADMIN_PASSWORD:?}
       E2E_ARGS: ${E2E_ARGS:-}
       E2E_SLOW: ${E2E_SLOW:-} # ./dev e2e --slow: include the tests tagged @slow
+      E2E_ONLY: ${E2E_ONLY:-} # ./dev e2e --only watch,auth: just these specs, after setup
       SCREENSHOTS: ${SCREENSHOTS:-} # ./dev screenshots: tests/screenshots.spec.ts writes docs/screenshots/
       SOAK_MINUTES: ${SOAK_MINUTES:-} # tests/soak.spec.ts runs only when set: SOAK_MINUTES=10 ./dev e2e tests/soak.spec.ts
       E2E_CONTROL_DIR: /src/.cache/e2e-control # requests to ./dev: stop or start the publisher, restart MediaMTX

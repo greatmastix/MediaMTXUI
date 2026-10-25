@@ -251,14 +251,19 @@ func TestRandomEdits(t *testing.T) {
 	}
 	// Each edit re-parses the 900-line file several times, so the long runs use the small sample; the reference config
 	// gets a shorter one. (3,200 edits on it passed when this was written; raise the numbers when touching the engine.)
-	// Independent sequences: they run in parallel (seconds instead of half a minute under -race).
-	for seed := range uint64(3) {
+	// Independent sequences: they run in parallel (seconds instead of half a minute under -race). With -short
+	// (./dev test --quick), a few of them.
+	refSeeds, sampleSeeds := uint64(3), uint64(40)
+	if testing.Short() {
+		refSeeds, sampleSeeds = 1, 8
+	}
+	for seed := range refSeeds {
 		t.Run(fmt.Sprint("reference, seed ", seed), func(t *testing.T) {
 			t.Parallel()
 			randomEdits(t, ref, seed, 80)
 		})
 	}
-	for seed := range uint64(40) {
+	for seed := range sampleSeeds {
 		t.Run(fmt.Sprint("sample, seed ", seed), func(t *testing.T) {
 			t.Parallel()
 			randomEdits(t, []byte(sample), seed, 60)

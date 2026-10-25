@@ -220,6 +220,9 @@ func TestMaliciousPayloads(t *testing.T) {
 
 // A wrapped key that asks for more scrypt memory than allowed is refused before any work.
 func TestWorkFactorCap(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: wraps a key above the work factor cap")
+	}
 	id, _ := age.GenerateX25519Identity()
 	sr, _ := age.NewScryptRecipient(pass)
 	sr.SetWorkFactor(maxWorkFactor + 1)

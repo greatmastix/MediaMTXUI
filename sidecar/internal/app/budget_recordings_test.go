@@ -223,6 +223,9 @@ func exportRequest(h *harness, host, query string) string {
 // An export gives its slot back by twice its range plus exportSlack, however slowly its client reads; the connection
 // it used serves later requests as before.
 func TestRecordingExportDeadline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: waits out the export deadline")
+	}
 	old := exportSlack
 	exportSlack = 300 * time.Millisecond
 	t.Cleanup(func() { exportSlack = old })

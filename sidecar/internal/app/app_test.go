@@ -420,6 +420,9 @@ func TestLoginRateLimit(t *testing.T) {
 
 // Unknown usernames and wrong passwords must take the same time: both paths run exactly one argon2id verification.
 func TestLoginTimingIsEqualised(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: times 30 sign-ins")
+	}
 	h := newHarness(t, map[string]string{"MTXUI_LOCKOUT_THRESHOLD": "100"}, auth.Params{Memory: 32 * 1024, Time: 1, Threads: 1})
 	h.completeSetup()
 	h.signOutLocally()
