@@ -134,6 +134,9 @@ func TestHoldingStandInWithMediaMTX(t *testing.T) {
 // An upload has as long as it keeps arriving: a body that trickles in for longer than bodyReadTimeout is taken in
 // whole, one that stalls for longer than the idle time is cut off.
 func TestSlidingBodyDeadline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: trickles bodies past bodyReadTimeout")
+	}
 	old := bodyReadTimeout
 	bodyReadTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { bodyReadTimeout = old })
