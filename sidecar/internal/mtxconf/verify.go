@@ -42,6 +42,21 @@ type Verifier struct {
 	Timeout  time.Duration // how long to wait for the reload; 10 s when zero
 	Interval time.Duration // between reads; 250 ms when zero
 	Down     time.Duration // no answer for this long means MediaMTX stopped; 4 s when zero
+	// Allowance, when set, is how much longer than Timeout MediaMTX may take to apply a config (long holding clips
+	// it reads whole on every reload).
+	Allowance func(config []byte) time.Duration
+}
+
+// budget is how long Verify waits for config to apply.
+func (v *Verifier) budget(config []byte) time.Duration {
+	timeout := v.Timeout
+	if timeout == 0 {
+		timeout = 10 * time.Second
+	}
+	if v.Allowance != nil {
+		timeout += v.Allowance(config)
+	}
+	return timeout
 }
 
 // Answering reports whether MediaMTX's API answers now.
@@ -53,10 +68,7 @@ func (v *Verifier) Answering(ctx context.Context) bool {
 // Verify compares MediaMTX's effective config with the changes from before to after. It never restores anything
 // itself: a result with State "" and a non-nil error means MediaMTX stopped answering, and the caller restores.
 func (v *Verifier) Verify(ctx context.Context, before, after []byte) (Applied, error) {
-	timeout, interval := v.Timeout, v.Interval
-	if timeout == 0 {
-		timeout = 10 * time.Second
-	}
+	timeout, interval := v.budget(after), v.Interval
 	if interval == 0 {
 		interval = 250 * time.Millisecond
 	}

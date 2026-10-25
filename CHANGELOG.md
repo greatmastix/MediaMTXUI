@@ -10,6 +10,12 @@ any add-on file you use, such as `compose.lan.yaml`), then `docker compose pull 
 
 ### New
 
+- **A stretch of a recording as the holding screen.** On a stream's recording, select up to an hour and press **Use
+  as holding screen**: the browser transcodes it into the stream's format and puts it up. See
+  [Holding screens](docs/holding-screens.md#a-stretch-of-a-recording).
+- **Holding clips up to 3.9 GB and an hour long** (were 64 MB, and two minutes when transcoded in the browser), with
+  upload progress. Set the size with `MTXUI_HOLDING_MAX_GB`. MediaMTX needs about 5 s more per hour of clip to load
+  its configuration or start the stream.
 - **Admins can set a password** for anyone on **People** (Edit, then Set password), including people invited but
   not joined yet. The usual password rules do not apply; it signs the person out everywhere and is audited. See
   [Setting a password](docs/people.md#setting-a-password).
@@ -25,9 +31,14 @@ any add-on file you use, such as `compose.lan.yaml`), then `docker compose pull 
   keep their names, so their recordings stay listed; MediaMTX's new warning about it is harmless (see
   [Troubleshooting](docs/troubleshooting.md#harmless-warnings-in-mediamtxs-log)).
 - Release notes come from this file: a release cannot be published without its section here.
+- **Backups leave out holding clips over 64 MB** (as before, but now they say so). A restore on a server without
+  such a clip shows the offline screen on that stream instead of refusing the backup, and its preview names them.
+- Behind a reverse proxy: allow request bodies up to 4 GB for holding clips (the examples in
+  [Behind a proxy](docs/behind-a-proxy.md) do).
 
 ### Fixed
 
+- A two-minute video transcoded into a 1080p holding clip could exceed the old 64 MB limit and was refused.
 - Saving a new `logLevel` now warns that it restarts all of MediaMTX's servers (it always did, so encoders and
   viewers drop for a moment); the settings page said it interrupted nothing.
 

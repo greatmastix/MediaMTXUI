@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ChevronLeft, ChevronRight, Download, Play, Trash2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Clapperboard, Download, Play, Trash2 } from 'lucide-react'
 import { cn } from 'cn'
 import { useRef, useState } from 'react'
 
@@ -14,10 +14,12 @@ import {
   type Span,
 } from '@/api/recordings'
 import { sessionQuery } from '@/api/sidecar'
+import { streamsQuery } from '@/api/streams'
 import { fieldClass } from '@/components/config/SettingsForm'
 import { RecordingFrames } from '@/components/RecordingFrames'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { formatBytes, formatDuration } from '@/lib/format'
+import { holdingClipMaxSeconds } from '@/lib/holdingLimits'
 import { atLeast } from '@/lib/roles'
 import { useNow } from '@/hooks/useNow'
 
@@ -67,6 +69,9 @@ export function RecordingPage({ name }: { name: string }) {
   const recordings = useQuery(recordingsQuery).data
   const info = recordings?.paths.find((p) => p.name === name)
   const maxSeconds = recordings?.exportMaxSeconds
+  // The stream these recordings are of, when it is one this person manages: a stretch can become its holding clip.
+  const stream = useQuery(streamsQuery).data?.find((st) => st.name === name && st.canManage)
+  const holdingMax = Math.min(holdingClipMaxSeconds, maxSeconds ?? holdingClipMaxSeconds)
   const latest = info ? new Date(info.last) : null
   const now = useNow(60_000)
 
@@ -412,6 +417,12 @@ export function RecordingPage({ name }: { name: string }) {
                 or download it in parts.
               </p>
             )}
+            {stream && selSeconds > holdingMax && (
+              <p className="text-sm text-muted-foreground" data-testid="holding-too-long">
+                A holding screen clip is at most {formatDuration(holdingMax)}: select less to use
+                this stretch as {stream.name}&apos;s holding screen.
+              </p>
+            )}
             <div className="flex flex-wrap gap-2">
               <Button
                 size="sm"
@@ -435,6 +446,24 @@ export function RecordingPage({ name }: { name: string }) {
                   <Download /> Download MP4
                 </a>
               )}
+              {stream &&
+                (selSeconds > holdingMax ? (
+                  <Button size="sm" variant="outline" disabled>
+                    <Clapperboard /> Use as holding screen
+                  </Button>
+                ) : (
+                  <Link
+                    className={buttonVariants({ size: 'sm', variant: 'outline' })}
+                    to="/streams/$id"
+                    params={{ id: String(stream.id) }}
+                    search={{
+                      clipFrom: sel.start.toISOString(),
+                      clipSeconds: Number(selSeconds.toFixed(3)),
+                    }}
+                  >
+                    <Clapperboard /> Use as holding screen
+                  </Link>
+                ))}
               {operator && inSel.length > 0 && !confirm && (
                 <Button
                   size="sm"

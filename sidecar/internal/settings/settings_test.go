@@ -41,6 +41,9 @@ func TestDefaults(t *testing.T) {
 	if s.StackSubnet.IsValid() || len(s.TrustedProxies) != 0 {
 		t.Errorf("optional values should be unset: %+v", s)
 	}
+	if gb := 3.9; s.HoldingMaxBytes != int64(gb*(1<<30)) || s.HoldingMaxBytes >= 1<<32 {
+		t.Errorf("holding clip limit %d: under 4 GiB, which MediaMTX's MP4 reader cannot go past", s.HoldingMaxBytes)
+	}
 }
 
 func TestParsing(t *testing.T) {
@@ -99,6 +102,8 @@ func TestRejects(t *testing.T) {
 		{"max age below idle", "MTXUI_SESSION_MAX_AGE", "6h", "at least"},
 		{"rate", "MTXUI_LOGIN_RATE_PER_MINUTE", "0", "between 1 and 600"},
 		{"threshold", "MTXUI_LOCKOUT_THRESHOLD", "many", "whole number"},
+		{"holding clips past 4 GiB", "MTXUI_HOLDING_MAX_GB", "4", "from 0.01 to 3.9"},
+		{"holding clips of nothing", "MTXUI_HOLDING_MAX_GB", "0", "from 0.01 to 3.9"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

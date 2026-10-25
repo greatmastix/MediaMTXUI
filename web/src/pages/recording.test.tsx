@@ -24,10 +24,11 @@ function renderApp(path: string) {
 const start = new Date(2026, 9, 3, 8, 0, 0)
 
 /** A camera recorded for six hours without a gap; the server exports at most two hours at a time. */
-function withRecording(tellsLimit: boolean) {
+function withRecording(tellsLimit: boolean, extra: Parameters<typeof fakeSidecar>[1] = {}) {
   return fakeSidecar(
     { session: adminSession },
     {
+      ...extra,
       'GET /api/v1/recordings': () =>
         json(200, {
           disk: {
@@ -150,4 +151,64 @@ describe('recording', () => {
     fireEvent.keyDown(startHandle, { key: 'PageUp' })
     expect(within(selection).getByTestId('selection-summary')).toHaveTextContent('1s')
   })
+
+  it('offers a stretch as the holding screen of its stream, up to an hour', async () => {
+    const stream = { id: 3, name: 'cam1', canManage: true }
+    withRecording(true, { 'GET /api/v1/streams': () => json(200, [streamFixture(stream)]) })
+    renderApp('/recordings/cam1')
+    const selection = await screen.findByRole('region', { name: 'Selection' })
+    fireEvent.change(within(selection).getByLabelText('From'), {
+      target: { value: '2026-10-03T09:00:00' },
+    })
+    fireEvent.change(within(selection).getByLabelText('Length (seconds)'), {
+      target: { value: '90' },
+    })
+    const use = await within(selection).findByRole('link', { name: 'Use as holding screen' })
+    const href = new URL(use.getAttribute('href') ?? '', 'http://x')
+    expect(href.pathname).toBe('/streams/3')
+    expect(new Date(href.searchParams.get('clipFrom') ?? '').getTime()).toBe(
+      new Date(2026, 9, 3, 9, 0, 0).getTime(),
+    )
+    expect(href.searchParams.get('clipSeconds')).toBe('90')
+
+    fireEvent.change(within(selection).getByLabelText('Length (seconds)'), {
+      target: { value: String(2 * 3600) },
+    })
+    expect(within(selection).getByRole('button', { name: 'Use as holding screen' })).toBeDisabled()
+    expect(within(selection).getByTestId('holding-too-long')).toHaveTextContent(
+      "A holding screen clip is at most 1h 0m: select less to use this stretch as cam1's holding screen.",
+    )
+  })
+
+  it('offers nothing for a stream someone may only watch', async () => {
+    withRecording(true, {
+      'GET /api/v1/streams': () =>
+        json(200, [streamFixture({ id: 3, name: 'cam1', canManage: false })]),
+    })
+    renderApp('/recordings/cam1')
+    const selection = await selectSixHours()
+    await screen.findByTestId('export-too-long')
+    expect(within(selection).queryByText('Use as holding screen')).not.toBeInTheDocument()
+  })
 })
+
+function streamFixture(s: { id: number; name: string; canManage: boolean }) {
+  return {
+    ...s,
+    title: '',
+    target: '',
+    maxReaders: 0,
+    record: true,
+    public: false,
+    owner: null,
+    keys: {},
+    createdAt: '2026-09-29T10:00:00Z',
+    createdBy: 'admin',
+    canAdmin: true,
+    ingest: { host: 'mtx.example.com', rtmp: 1935, hls: true, webrtc: true },
+    audio: 'aac',
+    holding: '',
+    clips: { aac: false, opus: false },
+    format: '1080p50',
+  }
+}

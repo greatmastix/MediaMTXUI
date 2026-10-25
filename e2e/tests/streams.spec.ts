@@ -424,6 +424,104 @@ test('a holding screen plays while nobody streams, and the encoder takes over', 
   await expect(page).toHaveURL(/\/streams$/)
 })
 
+test('a stretch of a recording becomes the holding screen', async ({ page }) => {
+  test.setTimeout(180_000)
+  await signInPage(page, '/streams')
+  await page.getByRole('button', { name: 'New stream' }).click()
+  await page.getByLabel('Path').fill('e2e/rec2hold')
+  await page.getByRole('button', { name: 'Create stream' }).click()
+  await expect(page.getByRole('heading', { name: 'e2e/rec2hold' })).toBeVisible()
+  const streamURL = page.url()
+  // Opus: Linux browsers cannot encode AAC.
+  const holding = page.getByRole('region', { name: 'Holding screen' })
+  await holding.getByRole('combobox', { name: /^Your encoder sends audio as/ }).selectOption('opus')
+  await page.getByRole('checkbox', { name: /^Record this stream/ }).check()
+  await page.getByRole('button', { name: 'Save' }).click()
+  await expect(page.getByText('Saved.')).toBeVisible()
+
+  // A few seconds recorded, then the encoder goes.
+  await page.getByRole('button', { name: 'Show stream settings' }).click()
+  await page.getByRole('button', { name: 'Show key' }).click()
+  const server = (await page.getByTestId('golive-RTMP-Server').innerText()).trim()
+  const key = (await page.getByTestId('golive-RTMP-Stream key').innerText()).trim()
+  recordSecret(new URLSearchParams(key.split('?')[1]).get('pass') ?? '')
+  await rtmpPublish(`${server}/${key}`)
+  await expect(page.getByTestId('stream-state')).toHaveAttribute('data-state', 'live', {
+    timeout: 30_000,
+  })
+  // What there is to select: a recording of some seconds.
+  const recorded = async () => {
+    const q = new URLSearchParams({
+      path: 'e2e/rec2hold',
+      start: new Date(Date.now() - 3600_000).toISOString(),
+      end: new Date(Date.now() + 60_000).toISOString(),
+    })
+    const res = await page.request.get(`/api/v1/recordings/spans?${q.toString()}`)
+    return res.ok()
+      ? ((await res.json()) as { duration: number }[]).reduce((n, sp) => n + sp.duration, 0)
+      : 0
+  }
+  await expect.poll(recorded, { timeout: 60_000, intervals: [1000] }).toBeGreaterThanOrEqual(5)
+  await page.getByRole('button', { name: 'Disconnect the encoder' }).click()
+  await expect(page.getByTestId('stream-state')).toHaveAttribute('data-state', 'offline', {
+    timeout: 15_000,
+  })
+
+  // The recording, selected whole, offered as the holding screen.
+  await page.goto('/recordings')
+  await page
+    .getByTestId('recording-row-e2e/rec2hold')
+    .getByRole('link', { name: 'e2e/rec2hold' })
+    .click()
+  await page.getByRole('button', { name: 'Latest' }).click()
+  await page.getByRole('group', { name: 'Zoom' }).getByRole('button', { name: '10 min' }).click()
+  const span = page.getByTestId('timeline-span').last()
+  await expect(span).toBeVisible({ timeout: 15_000 })
+  const box = await span.boundingBox()
+  if (!box) throw new Error('no span on the timeline')
+  await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2)
+  await page.getByRole('link', { name: 'Use as holding screen' }).click()
+  await expect(page).toHaveURL(new RegExp(`^${streamURL}\\?clipFrom=`))
+  const offer = page.getByRole('group', { name: 'Stretch from the recording' })
+  await expect(offer).toContainText('It is transcoded here into 1080p50 with Opus')
+
+  const canEncode = await page.evaluate(async () => {
+    if (typeof VideoEncoder === 'undefined' || typeof AudioEncoder === 'undefined') return false
+    const v = await VideoEncoder.isConfigSupported({
+      codec: 'avc1.640028',
+      width: 1920,
+      height: 1080,
+    })
+    const a = await AudioEncoder.isConfigSupported({
+      codec: 'opus',
+      sampleRate: 48000,
+      numberOfChannels: 2,
+    })
+    return Boolean(v.supported && a.supported)
+  })
+  await offer.getByRole('button', { name: 'Make it the holding screen' }).click()
+  if (canEncode) {
+    // Fetched, transcoded, both versions uploaded (the AAC one only where the browser can encode AAC).
+    await expect(holding.getByRole('radio', { name: 'My own clip' })).toBeChecked({
+      timeout: 120_000,
+    })
+    await expect(holding.getByRole('alert')).toHaveCount(0)
+    await expect(holding.getByTestId('holding-versions')).toContainText('✓ WHIP version (Opus)')
+    await expect(holding.getByRole('status').first()).toContainText(
+      /holding clip now|Only the WHIP version/,
+    )
+    await expect(offer).toHaveCount(0)
+    expect(new URL(page.url()).search).toBe('')
+  } else {
+    await expect(holding.getByRole('alert')).toContainText('cannot encode')
+    test.info().annotations.push({ type: 'skipped part', description: 'no H.264/Opus encoder' })
+  }
+
+  await page.getByRole('button', { name: 'Delete stream' }).click()
+  await page.getByRole('button', { name: 'Delete e2e/rec2hold and its keys' }).click()
+  await expect(page).toHaveURL(/\/streams$/)
+})
+
 test('an encoder with B-frames plays over HLS, and the page says why', async ({ page }) => {
   test.setTimeout(90_000)
   await signInPage(page, '/streams')

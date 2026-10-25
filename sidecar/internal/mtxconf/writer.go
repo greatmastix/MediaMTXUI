@@ -182,8 +182,13 @@ func (w *Writer) finish(ctx context.Context, before, after []byte, author, reaso
 			return Result{}, err
 		}
 	}
-	// The read-back must not stop because the browser went away: a restore it may lead to is not optional.
-	vctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	// The read-back must not stop because the browser went away: a restore it may lead to is not optional. It may run
+	// twice (a closing step first), each time with the verifier's allowance on top.
+	limit := 30 * time.Second
+	if w.Verifier != nil && w.Verifier.Allowance != nil {
+		limit += 2 * w.Verifier.Allowance(after)
+	}
+	vctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), limit)
 	defer cancel()
 	answering := w.Verifier != nil && w.Verifier.Answering(vctx)
 	from := before

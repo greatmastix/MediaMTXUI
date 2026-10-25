@@ -80,6 +80,8 @@ type BackupInfo struct {
 	Created time.Time `json:"created"`
 	Host    string    `json:"host"`
 	Version string    `json:"version"`
+	// LeftOutClips counts the holding clips too large for backups (backup.MaxClip), left out of this one.
+	LeftOutClips int `json:"leftOutClips,omitempty"`
 
 	modTime time.Time // when the file was written here: an upload's header says what its uploader wants
 }
@@ -104,8 +106,11 @@ type RestorePreview struct {
 	CurrentUsers   []string         `json:"currentUsers"`
 	CurrentStreams []string         `json:"currentStreams"`
 	Clips          int              `json:"clips"`
-	ConfigChanges  bool             `json:"configChanges"`
-	ExpiresAt      time.Time        `json:"expiresAt"`
+	// MissingClips are the streams (config paths) whose holding clip is in neither the backup (too large for it) nor
+	// this server: after the restore they show the offline screen.
+	MissingClips  []string  `json:"missingClips"`
+	ConfigChanges bool      `json:"configChanges"`
+	ExpiresAt     time.Time `json:"expiresAt"`
 }
 
 // backupState serialises backups, checks and restores, and holds the checked backup.
@@ -171,7 +176,7 @@ func (s *Server) listBackups() ([]BackupInfo, error) {
 				if !rd.Header.Created.IsZero() {
 					info.Created = rd.Header.Created
 				}
-				info.Host, info.Version = rd.Header.Host, rd.Header.Version
+				info.Host, info.Version, info.LeftOutClips = rd.Header.Host, rd.Header.Version, rd.Header.LeftOutClips
 			}
 			_ = f.Close()
 		}
@@ -254,7 +259,11 @@ func (s *Server) createBackup(ctx context.Context, kind string) (BackupInfo, err
 	if entries, err := os.ReadDir(cfg.HoldingDir); err == nil {
 		for _, e := range entries {
 			fi, err := e.Info()
-			if err != nil || !e.Type().IsRegular() || !backup.ClipName.MatchString(e.Name()) || fi.Size() > backup.MaxClip {
+			if err != nil || !e.Type().IsRegular() || !backup.ClipName.MatchString(e.Name()) {
+				continue
+			}
+			if fi.Size() > backup.MaxClip {
+				c.Manifest.LeftOut = append(c.Manifest.LeftOut, e.Name())
 				continue
 			}
 			c.Manifest.Holding = append(c.Manifest.Holding, e.Name())
@@ -276,7 +285,10 @@ func (s *Server) createBackup(ctx context.Context, kind string) (BackupInfo, err
 		return BackupInfo{}, err
 	}
 	defer root.Remove(tmp) //nolint:errcheck // gone after the rename
-	h := backup.Header{Created: now, Kind: kind, Version: buildinfo.Version, MediaMTX: buildinfo.MediaMTXVersion, Host: cfg.PublicURL.Host}
+	h := backup.Header{
+		Created: now, Kind: kind, Version: buildinfo.Version, MediaMTX: buildinfo.MediaMTXVersion, Host: cfg.PublicURL.Host,
+		LeftOutClips: len(c.Manifest.LeftOut),
+	}
 	err = backup.Write(f, h, recipient, []byte(wrapped), c)
 	if err == nil {
 		err = f.Sync()
@@ -292,7 +304,7 @@ func (s *Server) createBackup(ctx context.Context, kind string) (BackupInfo, err
 	}
 	fi, _ := root.Stat(name)
 	s.pruneBackups()
-	return BackupInfo{Name: name, Kind: kind, Size: fi.Size(), Created: now, Host: h.Host, Version: h.Version}, nil
+	return BackupInfo{Name: name, Kind: kind, Size: fi.Size(), Created: now, Host: h.Host, Version: h.Version, LeftOutClips: h.LeftOutClips}, nil
 }
 
 // pruneBackups deletes scheduled backups beyond the schedule's keep, before-restore ones beyond three, uploads
@@ -748,15 +760,24 @@ func (s *Server) stage(ctx context.Context, name, passphrase string) (*stagedRes
 	if err := s.placeClips(dir, ex.Clips); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	if err := s.d.Config.Validate(ctx, conf); err != nil {
+	// A clip too large for the backup that is not here either: the restore shows the offline screen instead (FinishRestore),
+	// so the config is checked that way.
+	checked, missing, err := s.replaceMissingClips(conf, func(string) string {
+		return filepath.Join(cfg.HoldingDir, offlineClip(defaultFormat, audioAAC))
+	})
+	if err != nil {
+		return nil, http.StatusUnprocessableEntity, fmt.Errorf("the backup's mediamtx.yml is refused: %w", err)
+	}
+	if err := s.d.Config.Validate(ctx, checked); err != nil {
 		return nil, http.StatusUnprocessableEntity, fmt.Errorf("the backup's mediamtx.yml is refused: %w", err)
 	}
 	users, _ := s.d.Store.Users(ctx)
 	streams, _ := s.d.Store.Streams(ctx)
 	st.preview = RestorePreview{
 		Name: name, Created: ex.Manifest.Created, Version: ex.Manifest.Version, MediaMTX: ex.Manifest.MediaMTX, Database: in,
-		CurrentUsers: []string{}, CurrentStreams: []string{}, Clips: len(ex.Clips), ConfigChanges: string(current) != string(conf),
-		ExpiresAt: time.Now().Add(stagingTTL),
+		CurrentUsers: []string{}, CurrentStreams: []string{}, Clips: len(ex.Clips), MissingClips: append([]string{}, missing...),
+		ConfigChanges: string(current) != string(conf),
+		ExpiresAt:     time.Now().Add(stagingTTL),
 	}
 	for _, u := range users {
 		st.preview.CurrentUsers = append(st.preview.CurrentUsers, u.Username)

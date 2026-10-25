@@ -46,4 +46,69 @@ describe('backups', () => {
     )
     expect(calls.some((c) => c.path === '/api/v1/backups/upload')).toBe(false)
   })
+
+  it('says which large holding clips a backup leaves out', async () => {
+    fakeSidecar(
+      { session: adminSession },
+      {
+        'GET /api/v1/backups': () =>
+          json(200, {
+            ...backups,
+            backups: [
+              {
+                name: 'mtxui-20261025-033000-scheduled.mtxbackup',
+                kind: 'scheduled',
+                size: 5_000_000,
+                created: '2026-10-25T03:30:00Z',
+                host: 'mtx.example.com',
+                version: 'v1.4.0',
+                leftOutClips: 2,
+              },
+            ],
+          }),
+      },
+    )
+    renderApp('/backups')
+    expect(await screen.findByTestId('backup-left-out')).toHaveTextContent(
+      'without 2 large holding clips',
+    )
+  })
+
+  it('names the streams a restore leaves without their holding clip', async () => {
+    fakeSidecar(
+      { session: adminSession },
+      {
+        'GET /api/v1/backups': () =>
+          json(200, {
+            ...backups,
+            staged: {
+              name: 'mtxui-20261025-033000-scheduled.mtxbackup',
+              created: '2026-10-25T03:30:00Z',
+              version: 'v1.4.0',
+              mediamtx: '1.21.3',
+              database: {
+                schema: 20,
+                users: ['admin'],
+                admins: 1,
+                streams: ['live/big'],
+                credentials: 1,
+                snapshots: 3,
+                historyMinutes: 60,
+                auditEntries: 10,
+              },
+              currentUsers: ['admin'],
+              currentStreams: ['live/big'],
+              clips: 8,
+              missingClips: ['live/big'],
+              configChanges: false,
+              expiresAt: '2099-10-25T04:00:00Z',
+            },
+          }),
+      },
+    )
+    renderApp('/backups')
+    expect(await screen.findByTestId('preview-missing-clips')).toHaveTextContent(
+      'Holding clips too large for backups, and not on this server: live/big. These streams show the offline screen after the restore',
+    )
+  })
 })

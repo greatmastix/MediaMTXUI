@@ -61,9 +61,13 @@ Two more kinds are cleaned up by themselves: the newest three **Before a restore
 | Streams, their keys and settings, guest keys, forwards | MediaMTX's log and the sidecar's log |
 | Stream credentials (and the key they are encrypted with) | The HTTPS certificate (a new one is requested by itself) |
 | The MediaMTX configuration (`mediamtx.yml`) and its full history | Your `.env`, `compose.yaml` and overrides |
-| Holding clips | |
+| Holding clips up to 64 MB | Larger holding clips |
 | Chart history and the audit log | |
 | The backup passphrase and schedule | |
+
+A holding clip larger than 64 MB (they may be up to 3.9 GB) is left out, or every backup would grow by its size; the
+backup list says "without 1 large holding clip". Restored on a server that does not have the clip, its stream shows
+the offline screen instead, and the restore's preview names those streams first: upload their clips again afterwards.
 
 In short: everything needed to set this server up again, except the recordings. Copy recordings separately if you
 need them (see [Backing up the Docker volumes](#backing-up-the-docker-volumes)), and keep a copy of your `.env` and

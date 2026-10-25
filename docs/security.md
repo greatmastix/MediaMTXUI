@@ -124,9 +124,11 @@ viewer changing settings). An admin can change everything by design; the host an
   sessions, live tails of the log viewer (32), event streams per person, guest keys (10 per stream), forwards (5),
   passkeys (10), saved layouts (50), multi-view tiles (9), config history (1,000 snapshots).
 - [x] Expensive work is queued or capped: password hashing (at most 16 waiting), recording exports (concurrent
-  exports and length), holding clips (64 MiB), backup uploads, the backup key's work factor.
+  exports and length), holding clips (3.9 GB by default, `MTXUI_HOLDING_MAX_GB`, an hour of video at most, and only
+  with twice their size free on the disk; an upload that stalls for 2 minutes is cut off), backup uploads, the backup
+  key's work factor.
 - [x] Anonymous requests do not fill the audit log; audit fields are clipped.
-  *Evidence:* `TestBodyDeadline`, `TestHasherBusy`, `TestLockoutBound`, `TestRecordingExportCap`,
+  *Evidence:* `TestBodyDeadline`, `TestSlidingBodyDeadline`, `TestHoldingUploadLimits`, `TestHasherBusy`, `TestLockoutBound`, `TestRecordingExportCap`,
   `TestEventStreamsPerUser`, `TestSnapshotsPruned`, `TestWorkFactorCap`, `TestAuditAnonymous`, `TestPasskeyCapAtStore`.
 
 ### MediaMTX's configuration

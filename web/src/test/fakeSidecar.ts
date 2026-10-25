@@ -40,6 +40,7 @@ export const initialSettings = (): Record<string, unknown> => ({
 export interface Call {
   method: string
   path: string
+  search: string
   headers: Headers
   body: unknown
 }
@@ -289,7 +290,7 @@ export function fakeSidecar(initial: Partial<FakeState> = {}, extra: Record<stri
     const method = init?.method ?? 'GET'
     const headers = new Headers(init?.headers)
     const body: unknown = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
-    calls.push({ method, path: url.pathname, headers, body })
+    calls.push({ method, path: url.pathname, search: url.search, headers, body })
     const key = `${method} ${url.pathname}`
     const find = (table: Record<string, Route>) =>
       table[key] ??

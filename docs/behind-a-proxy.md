@@ -23,7 +23,8 @@ port. The stream ports are published as before: the proxy only carries the UI, i
 
 - Pass the `Host` header, and set `X-Forwarded-For` and `X-Forwarded-Proto`.
 - Not buffer responses: the live event stream and log tail are long-lived (server-sent events).
-- Allow large request bodies for holding clips (64 MB) and backup uploads (up to `MTXUI_BACKUP_MAX_UPLOAD_MB`).
+- Allow large request bodies for holding clips (up to 3.9 GB, `MTXUI_HOLDING_MAX_GB`) and backup uploads (up to
+  `MTXUI_BACKUP_MAX_UPLOAD_MB`), and let an upload take as long as it keeps arriving.
 
 The sidecar believes `X-Forwarded-*` only from `TRUSTED_PROXIES`. With the proxy on the same host, connections reach
 the container from the stack network's gateway: the override pins the network to `172.29.42.0/24` and trusts
@@ -38,7 +39,7 @@ stream.example.com {
 		flush_interval -1
 	}
 	request_body {
-		max_size 2GB
+		max_size 4GiB
 	}
 }
 ```
@@ -52,7 +53,7 @@ server {
     server_name stream.example.com;
     # ssl_certificate ... (certbot, or your own)
 
-    client_max_body_size 2g;
+    client_max_body_size 4g;
 
     location / {
         proxy_pass http://127.0.0.1:8080;
@@ -61,6 +62,7 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_buffering off;
+        proxy_request_buffering off; # a holding clip of gigabytes goes straight through
         proxy_read_timeout 1h;
     }
 }

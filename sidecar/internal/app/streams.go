@@ -152,6 +152,8 @@ type StreamInfo struct {
 	Holding    string                    `json:"holding"` // "", builtin or file
 	Clips      StreamClips               `json:"clips"`   // the own holding clip's versions
 	Format     string                    `json:"format"`  // the stream's video format, which holding clips are in
+	// HoldingMaxBytes is the largest holding clip an upload may be (MTXUI_HOLDING_MAX_GB), for those who manage it.
+	HoldingMaxBytes int64 `json:"holdingMaxBytes,omitempty"`
 }
 
 var (
@@ -238,7 +240,10 @@ func (s *Server) streamInfo(ctx context.Context, st store.Stream, cur *currentSe
 		Format: st.Format,
 	}
 	if info.Format == "" {
-		info.Format = "1080p50"
+		info.Format = defaultFormat
+	}
+	if info.CanManage {
+		info.HoldingMaxBytes = s.d.Settings.HoldingMaxBytes
 	}
 	if info.Audio == "" {
 		info.Audio = audioAAC

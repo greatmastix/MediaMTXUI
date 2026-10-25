@@ -49,6 +49,7 @@ type Settings struct {
 	ExportMaxDuration       time.Duration
 	ExportMaxBytes          int64
 	ExportConcurrency       int
+	HoldingMaxBytes         int64
 	// Passkeys: offered when the UI has a secure origin (HTTPS, or localhost); "on" forces them (a test stack whose
 	// browser treats its plain-HTTP origin as secure), "off" hides them.
 	Passkeys bool
@@ -109,6 +110,7 @@ var Vars = []Var{
 	{Name: "MTXUI_EXPORT_MAX_DURATION", Default: "2h", Description: "Longest range one recording export may cover (1m to 24h)."},
 	{Name: "MTXUI_EXPORT_MAX_GB", Default: "8", Description: "Largest recording export in GB: the download stops there."},
 	{Name: "MTXUI_EXPORT_CONCURRENCY", Default: "2", Description: "Recording exports running at once (1 to 16); more are refused until one ends. An export holds its slot at most twice its range plus a minute, however slowly the client reads."},
+	{Name: "MTXUI_HOLDING_MAX_GB", Default: "3.9", Description: "Largest holding clip a stream may upload, in GB (0.01 to 3.9: MediaMTX reads no MP4 of 4 GB or more). The server needs twice that free while it stores one."},
 	{Name: "MTXUI_PASSKEYS", Default: "auto", Description: "Passkeys (WebAuthn sign-in): `auto` offers them when MTXUI_PUBLIC_URL is HTTPS or localhost (browsers allow them only there; the relying party is its host), `on` (needs a domain name or localhost there, not an IP address) or `off`."},
 	{Name: "MTXUI_MEDIAMTX_BIN", Default: "/usr/libexec/mtxui/mediamtx", Description: "The MediaMTX binary the image carries, used only to run `--validate-conf` on every config before it is written."},
 	{Name: "MTXUI_MEDIAMTX_LOG_MAX_MB", Default: "20", Description: "MediaMTX's log file is rotated (copy-truncate, gzipped) when it grows past this many MB (1 to 1024)."},
@@ -151,6 +153,7 @@ func Load(getenv func(string) string) (*Settings, error) {
 		ExportMaxDuration:       p.duration("MTXUI_EXPORT_MAX_DURATION", time.Minute, 24*time.Hour),
 		ExportMaxBytes:          p.gigabytes("MTXUI_EXPORT_MAX_GB"),
 		ExportConcurrency:       p.integer("MTXUI_EXPORT_CONCURRENCY", 1, 16),
+		HoldingMaxBytes:         p.holdingBytes("MTXUI_HOLDING_MAX_GB"),
 		MediaMTXLogMaxBytes:     int64(p.integer("MTXUI_MEDIAMTX_LOG_MAX_MB", 1, 1024)) << 20,
 		MediaMTXLogKeep:         p.integer("MTXUI_MEDIAMTX_LOG_KEEP", 0, 50),
 		HistoryDays:             p.integer("MTXUI_HISTORY_DAYS", 1, 365),
@@ -428,6 +431,19 @@ func (p *parser) gigabytes(name string) int64 {
 	f, err := strconv.ParseFloat(p.get(name), 64)
 	if err != nil || math.IsNaN(f) || f < 0 || f > 1e6 {
 		p.fail(name, "must be a number of GB from 0 to 1000000")
+		return 0
+	}
+	return int64(f * (1 << 30))
+}
+
+// maxHoldingGB is the largest holding clip MediaMTX can read: its MP4 reader (mediacommon's pmp4, in 1.21.3) takes
+// only 32-bit chunk offsets (stco, not co64), so every sample must start below 4 GiB.
+const maxHoldingGB = 3.9
+
+func (p *parser) holdingBytes(name string) int64 {
+	f, err := strconv.ParseFloat(p.get(name), 64)
+	if err != nil || math.IsNaN(f) || f < 0.01 || f > maxHoldingGB {
+		p.fail(name, "must be a number of GB from 0.01 to %g", maxHoldingGB)
 		return 0
 	}
 	return int64(f * (1 << 30))

@@ -52,9 +52,12 @@ const (
 	maxKeyBlock = 8 << 10
 	maxManifest = 64 << 10
 	maxConfig   = 1 << 20
-	MaxClip     = 64 << 20 // as an upload (app.maxHoldingBytes)
-	maxClips    = 1000
-	KeyLen      = 32 // the credential key
+	// MaxClip is the largest holding clip a backup carries. Larger ones (a stream may upload gigabytes) are left out
+	// and listed (Manifest.LeftOut), or every backup would grow by them; after a restore their streams show the
+	// offline screen until the clip is uploaded again.
+	MaxClip  = 64 << 20
+	maxClips = 1000
+	KeyLen   = 32 // the credential key
 )
 
 // Entry names in the payload.
@@ -78,6 +81,8 @@ type Header struct {
 	Version  string    `json:"version"`
 	MediaMTX string    `json:"mediamtx"`
 	Host     string    `json:"host"`
+	// LeftOutClips counts the holding clips too large to carry (MaxClip), for the backup list.
+	LeftOutClips int `json:"leftOutClips,omitempty"`
 }
 
 // Manifest describes the payload, inside the encryption.
@@ -86,8 +91,9 @@ type Manifest struct {
 	Created  time.Time `json:"created"`
 	Version  string    `json:"version"`
 	MediaMTX string    `json:"mediamtx"`
-	Schema   int64     `json:"schema"`  // the database's migration version
-	Holding  []string  `json:"holding"` // the clips, in the order they follow
+	Schema   int64     `json:"schema"`            // the database's migration version
+	Holding  []string  `json:"holding"`           // the clips, in the order they follow
+	LeftOut  []string  `json:"leftOut,omitempty"` // holding clips too large to carry (MaxClip)
 }
 
 // Errors a restore shows as they are.

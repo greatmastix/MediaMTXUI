@@ -7,11 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	amp4 "github.com/abema/go-mp4"
@@ -37,9 +40,6 @@ import (
 // while the stream is available, so platforms show the holding clip too (the user's choice, 2026-10-01). Recording
 // skips the holding clip (alwaysAvailableRecorded: no).
 
-// maxHoldingBytes caps an uploaded clip.
-const maxHoldingBytes = 64 << 20
-
 // Audio codecs a stream's encoder may send.
 const (
 	audioAAC  = "aac"
@@ -52,6 +52,9 @@ type videoFormat struct {
 	width, height int
 	fps           float64
 }
+
+// defaultFormat is a stream's format until it chooses one.
+const defaultFormat = "1080p50"
 
 var videoFormats = map[string]videoFormat{
 	"720p50": {1280, 720, 50}, "720p60": {1280, 720, 60}, "1080p50": {1920, 1080, 50}, "1080p60": {1920, 1080, 60},
@@ -181,16 +184,16 @@ func codecName(c codecs.Codec) string {
 	return strings.TrimPrefix(fmt.Sprintf("%T", c), "*codecs.")
 }
 
-// receiveClip writes an upload into a temporary file in the holding directory, which the caller closes and removes,
-// and returns it with its size.
-func (s *Server) receiveClip(body io.Reader) (*os.File, int64, error) {
+// receiveClip writes an upload of at most limit bytes into a temporary file in the holding directory, which the
+// caller closes and removes, and returns it with its size.
+func (s *Server) receiveClip(body io.Reader, limit int64) (*os.File, int64, error) {
 	up, err := os.CreateTemp(s.d.Settings.HoldingDir, ".upload-*")
 	if err != nil {
 		return nil, 0, err
 	}
-	n, err := io.Copy(up, io.LimitReader(body, maxHoldingBytes+1))
-	if err == nil && n > maxHoldingBytes {
-		err = userErrorf("The clip is larger than %d MB.", maxHoldingBytes>>20)
+	n, err := io.Copy(up, io.LimitReader(body, limit+1))
+	if err == nil && n > limit {
+		err = userErrorf("The clip is larger than %s.", gigabytes(limit))
 	}
 	if err != nil {
 		_ = up.Close()
@@ -310,7 +313,13 @@ func (s *Server) storeClip(streamID int64, audio, format string, up *os.File, si
 		return "", err
 	}
 	name := fmt.Sprintf("%d-%s.mp4", streamID, hex.EncodeToString(h.Sum(nil))[:12])
-	return name, os.Rename(out.Name(), filepath.Join(dir, name))
+	if err := os.Rename(out.Name(), filepath.Join(dir, name)); err != nil {
+		return "", err
+	}
+	if s.d.HoldingClips != nil {
+		s.d.HoldingClips.mark(name, presentationSeconds(&p))
+	}
+	return name, nil
 }
 
 // removeClip deletes a stream's old holding clip; a file name never leaves the holding directory.
@@ -399,8 +408,22 @@ func (s *Server) holdingUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer uploading.Delete(upload)
-	extendBodyDeadline(w, holdingUploadTime)
-	up, size, err := s.receiveClip(http.MaxBytesReader(w, r.Body, maxHoldingBytes+1))
+	limit := s.d.Settings.HoldingMaxBytes
+	if r.ContentLength > limit {
+		writeError(w, http.StatusUnprocessableEntity, "clip", fmt.Sprintf("The clip is larger than %s.", gigabytes(limit)))
+		return
+	}
+	// Storing a clip takes twice its size for a moment (the upload and the clip written from it), and it must not
+	// push the disk below where recording is switched off, should the clips share it with the recordings.
+	if need := 2*r.ContentLength + max(s.d.Settings.RecordingsCriticalBytes, 1<<30); r.ContentLength > 0 {
+		if free, ok := diskFree(s.d.Settings.HoldingDir); ok && free < need {
+			writeError(w, http.StatusInsufficientStorage, "space", fmt.Sprintf(
+				"The server has %s free for holding clips, and storing this one needs %s. Free some space, or upload a smaller clip.",
+				gigabytes(free), gigabytes(need)))
+			return
+		}
+	}
+	up, size, err := s.receiveClip(http.MaxBytesReader(w, slidingBody(w, r.Body, holdingUploadIdle), limit+1), limit)
 	if err == nil {
 		defer os.Remove(up.Name())
 		defer up.Close()
@@ -473,8 +496,24 @@ func (s *Server) holdingUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.streamInfo(ctx, st, cur, s.readMTXConfig()))
 }
 
-// holdingUploadTime is how long an upload may take to arrive: 64 MB at about 1 Mbit/s.
-const holdingUploadTime = 10 * time.Minute
+// holdingUploadIdle is how long an upload may stall: a clip of gigabytes takes as long as it takes to arrive, as long
+// as it keeps arriving.
+const holdingUploadIdle = 2 * time.Minute
+
+// diskFree returns the space available to unprivileged writers on dir's filesystem; ok is false when it cannot be read.
+var diskFree = func(dir string) (int64, bool) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return 0, false
+	}
+	bsize := int64(st.Bsize) //nolint:unconvert // int32 on 32-bit ARM
+	return int64(st.Bavail) * bsize, true
+}
+
+// gigabytes says n bytes in GB (binary, as the settings count them): "3.9 GB", "0.25 GB".
+func gigabytes(n int64) string {
+	return strconv.FormatFloat(math.Round(float64(n)/(1<<30)*100)/100, 'f', -1, 64) + " GB"
+}
 
 // uploading marks the streams a holding clip is being uploaded for (an uploadKey each).
 var uploading sync.Map

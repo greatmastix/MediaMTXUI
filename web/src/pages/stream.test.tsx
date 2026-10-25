@@ -48,11 +48,12 @@ const alice = (): Stream => ({
 })
 
 /** The fake sidecar with one stream, which a PATCH changes as asked. */
-function withStream(session: Session) {
+function withStream(session: Session, extra: Parameters<typeof fakeSidecar>[1] = {}) {
   const stream = alice()
   const fake = fakeSidecar(
     { session },
     {
+      ...extra,
       'GET /api/v1/streams/1': () => json(200, stream),
       'PATCH /api/v1/streams/1': (body) => {
         Object.assign(stream, body)
@@ -129,5 +130,49 @@ describe('stream settings', () => {
     })
     expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ maxReaders: 5 })
     expect(stream.owner).toEqual({ id: 8, username: 'bob' })
+  })
+})
+
+describe('holding screen from a recording', () => {
+  it('offers the stretch the recording page sent, fetches it to make the clip, and can be turned down', async () => {
+    const { calls } = withStream(streamer, {
+      'GET /api/v1/recordings/export': () =>
+        new Response(new Uint8Array([0, 0, 0, 8, 102, 114, 101, 101]), {
+          headers: { 'Content-Type': 'video/mp4' },
+        }),
+    })
+    renderApp('/streams/1?clipFrom=2026-10-03T09%3A00%3A00.000Z&clipSeconds=90')
+    const offer = await screen.findByRole('group', { name: 'Stretch from the recording' })
+    expect(offer).toHaveTextContent('(1m 30s)')
+    expect(offer).toHaveTextContent('It is transcoded here into 720p50 with AAC')
+    const user = userEvent.setup()
+    await user.click(within(offer).getByRole('button', { name: 'Make it the holding screen' }))
+    // The stretch is fetched as Download MP4 would; this browser (jsdom) has no encoder, which the card says.
+    const holding = screen.getByRole('region', { name: 'Holding screen' })
+    expect(await within(holding).findByRole('alert')).toHaveTextContent('cannot encode')
+    const fetched = calls.find((c) => c.path === '/api/v1/recordings/export')
+    const q = new URLSearchParams(fetched?.search)
+    expect([q.get('path'), q.get('start'), q.get('duration')]).toEqual([
+      'live/alice',
+      '2026-10-03T09:00:00.000Z',
+      '90.000',
+    ])
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+
+    await user.click(within(offer).getByRole('button', { name: 'Not now' }))
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('group', { name: 'Stretch from the recording' }),
+      ).not.toBeInTheDocument()
+    })
+  })
+
+  it('ignores a stretch longer than a holding clip may be', async () => {
+    withStream(streamer)
+    renderApp('/streams/1?clipFrom=2026-10-03T09%3A00%3A00.000Z&clipSeconds=7200')
+    await screen.findByRole('region', { name: 'Holding screen' })
+    expect(
+      screen.queryByRole('group', { name: 'Stretch from the recording' }),
+    ).not.toBeInTheDocument()
   })
 })

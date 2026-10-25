@@ -241,6 +241,14 @@ func FinishRestore(ctx context.Context, sr *StagedRestore, cfg *settings.Setting
 	}
 	conf, err := os.ReadFile(filepath.Join(sr.dir, backup.ConfigFile))
 	if err == nil {
+		// Holding clips too large for the backup, and not on this server: their streams show the offline screen.
+		var lost []string
+		if conf, lost, err = s.missingClipsFallback(ctx, conf); len(lost) > 0 {
+			details["holdingClipsMissing"] = lost
+			log.Warn("restored streams whose holding clip was not in the backup show the offline screen", "streams", lost)
+		}
+	}
+	if err == nil {
 		_, err = w.Replace(ctx, conf, "", "system", "restored from "+sr.ex.Name, s.guardEdit)
 		if errors.Is(err, mtxconf.ErrUnchanged) {
 			err = nil

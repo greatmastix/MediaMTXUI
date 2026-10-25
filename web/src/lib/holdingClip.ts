@@ -11,7 +11,11 @@ import {
   Input,
   Mp4OutputFormat,
   Output,
+  StreamTarget,
 } from 'mediabunny'
+
+import { holdingClipMaxSeconds } from './holdingLimits'
+import { hasScratch, newScratch } from './scratch'
 
 // Holding clips made in the browser (loaded only when someone makes one): a picture becomes a short clip, a video is
 // transcoded, all to what the stream's encoder sends: H.264 in the stream's format plus stereo
@@ -30,7 +34,17 @@ const formats: Record<ClipFormat, { width: number; height: number; fps: number; 
     '1080p60': { width: 1920, height: 1080, fps: 60, bitrate: 5_000_000 },
   }
 
-const maxSeconds = 120
+const audioBitrate = 128_000
+
+/**
+ * The video bitrate for a clip of so many seconds: the format's, or less where the clip would not fit into the
+ * server's limit (maxBytes, MTXUI_HOLDING_MAX_GB) with its sound and some room to spare.
+ */
+export function videoBitrate(format: ClipFormat, seconds: number, maxBytes?: number): number {
+  if (!maxBytes) return formats[format].bitrate
+  const fits = Math.floor((maxBytes * 0.95 * 8) / Math.max(seconds, 1) - audioBitrate)
+  return Math.max(250_000, Math.min(formats[format].bitrate, fits))
+}
 
 /** Why this browser cannot make a clip with that audio and format, or null when it can. */
 export async function cannotEncode(audio: ClipAudio, format: ClipFormat): Promise<string | null> {
@@ -49,15 +63,26 @@ export async function cannotEncode(audio: ClipAudio, format: ClipFormat): Promis
   return null
 }
 
-function newOutput() {
+/**
+ * Where a clip is written: a scratch file where the browser keeps files (a clip may be gigabytes), else memory. The
+ * MP4 has its index at the end then; the server reads it either way and writes it back for MediaMTX.
+ */
+async function newOutput() {
+  if (hasScratch()) {
+    const file = await newScratch()
+    const target = new StreamTarget(await file.createWritable(), { chunked: true })
+    const output = new Output({ format: new Mp4OutputFormat({ fastStart: false }), target })
+    return { output, result: () => file.getFile() }
+  }
   const target = new BufferTarget()
   const output = new Output({ format: new Mp4OutputFormat({ fastStart: 'in-memory' }), target })
-  return { output, target }
-}
-
-function blobOf(target: BufferTarget) {
-  if (!target.buffer) throw new Error('The clip came out empty.')
-  return new Blob([target.buffer], { type: 'video/mp4' })
+  return {
+    output,
+    result: () => {
+      if (!target.buffer) throw new Error('The clip came out empty.')
+      return Promise.resolve(new Blob([target.buffer], { type: 'video/mp4' }))
+    },
+  }
 }
 
 function silence(seconds: number) {
@@ -103,13 +128,13 @@ export async function clipFromImage(
   const bitmap = await createImageBitmap(file)
   drawContained(ctx, bitmap)
   bitmap.close()
-  const { output, target } = newOutput()
+  const { output, result } = await newOutput()
   const video = new CanvasSource(canvas, {
     codec: 'avc',
     bitrate: formats[format].bitrate / 2,
     keyFrameInterval: 1,
   })
-  const sound = new AudioBufferSource({ codec: audio, bitrate: 128_000 })
+  const sound = new AudioBufferSource({ codec: audio, bitrate: audioBitrate })
   output.addVideoTrack(video, { frameRate: fps })
   output.addAudioTrack(sound)
   await output.start()
@@ -120,22 +145,27 @@ export async function clipFromImage(
   }
   await sound.add(silence(seconds))
   await output.finalize()
-  return blobOf(target)
+  return result()
 }
 
-/** A video transcoded to fit (at most two minutes), with silence when it has no sound. */
+/**
+ * A video transcoded to fit (at most an hour), with silence when it has no sound, within the server's limit
+ * (maxBytes) when it says one.
+ */
 export async function transcodeClip(
   file: Blob,
   audio: ClipAudio,
   format: ClipFormat,
   onProgress?: (p: number) => void,
+  maxBytes?: number,
 ): Promise<Blob> {
-  const { width, height, fps, bitrate } = formats[format]
+  const { width, height, fps } = formats[format]
   const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS })
   const videoTrack = await input.getPrimaryVideoTrack()
   if (!videoTrack) throw new Error('The file has no video this browser can read.')
-  const duration = Math.min(await input.computeDuration(), maxSeconds)
-  const { output, target } = newOutput()
+  const duration = Math.min(await input.computeDuration(), holdingClipMaxSeconds)
+  const bitrate = videoBitrate(format, duration, maxBytes)
+  const { output, result } = await newOutput()
 
   if (await input.getPrimaryAudioTrack()) {
     const conversion = await Conversion.init({
@@ -157,7 +187,7 @@ export async function transcodeClip(
         codec: audio,
         numberOfChannels: 2,
         sampleRate: 48000,
-        bitrate: 128_000,
+        bitrate: audioBitrate,
         forceTranscode: true,
       },
     })
@@ -168,13 +198,13 @@ export async function transcodeClip(
     }
     if (onProgress) conversion.onProgress = onProgress
     await conversion.execute()
-    return blobOf(target)
+    return result()
   }
 
   // No sound: frame by frame into the format's frame at its rate, then silence of the same length.
   const { canvas, ctx } = frame(format)
   const video = new CanvasSource(canvas, { codec: 'avc', bitrate, keyFrameInterval: 1 })
-  const sound = new AudioBufferSource({ codec: audio, bitrate: 128_000 })
+  const sound = new AudioBufferSource({ codec: audio, bitrate: audioBitrate })
   output.addVideoTrack(video, { frameRate: fps })
   output.addAudioTrack(sound)
   await output.start()
@@ -191,7 +221,7 @@ export async function transcodeClip(
   }
   await sound.add(silence(duration))
   await output.finalize()
-  return blobOf(target)
+  return result()
 }
 
 /** Why this browser cannot make a clip's version with that audio (the video is copied), or null when it can. */
@@ -213,7 +243,7 @@ export async function withAudio(
   onProgress?: (p: number) => void,
 ): Promise<Blob> {
   const input = new Input({ source: new BlobSource(clip), formats: ALL_FORMATS })
-  const { output, target } = newOutput()
+  const { output, result } = await newOutput()
   const conversion = await Conversion.init({
     input,
     output,
@@ -222,7 +252,7 @@ export async function withAudio(
       codec: audio,
       numberOfChannels: 2,
       sampleRate: 48000,
-      bitrate: 128_000,
+      bitrate: audioBitrate,
       forceTranscode: true,
     },
   })
@@ -233,5 +263,5 @@ export async function withAudio(
   }
   if (onProgress) conversion.onProgress = onProgress
   await conversion.execute()
-  return blobOf(target)
+  return result()
 }

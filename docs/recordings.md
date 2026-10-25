@@ -67,6 +67,9 @@ With a stretch selected:
 
 - **Play** plays it right on the page.
 - **Download MP4** saves it as one MP4 file, which plays in VLC, QuickTime, video editors and most other players.
+- **Use as holding screen** (for a stream you manage, a stretch of at most an hour) makes it the stream's holding
+  screen: what viewers see while nobody streams. See
+  [Holding screens](holding-screens.md#a-stretch-of-a-recording).
 
 Both have limits, so that one long download cannot tie up the server:
 

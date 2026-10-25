@@ -88,6 +88,62 @@ export async function request<T>(
   return schema.parse(await res.json())
 }
 
+/**
+ * Sends a file and validates the JSON answer, as request does, reporting the bytes sent so far: a clip may be
+ * gigabytes, and fetch says nothing until the upload is done, so this one goes by XMLHttpRequest.
+ */
+export async function upload<T>(
+  method: string,
+  path: string,
+  schema: z.ZodType<T>,
+  file: Blob,
+  onProgress?: (sent: number, total: number) => void,
+): Promise<T> {
+  const once = () =>
+    new Promise<unknown>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open(method, path)
+      xhr.setRequestHeader('Accept', 'application/json')
+      xhr.setRequestHeader('Content-Type', file.type)
+      if (csrfToken) xhr.setRequestHeader('X-CSRF-Token', csrfToken)
+      if (onProgress) {
+        xhr.upload.onprogress = (e) => {
+          onProgress(e.loaded, e.lengthComputable ? e.total : file.size)
+        }
+      }
+      xhr.onload = () => {
+        let body: unknown = null
+        try {
+          body = JSON.parse(xhr.responseText) as unknown
+        } catch {
+          // not JSON
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(body)
+          return
+        }
+        const parsed = errorSchema.safeParse(body)
+        reject(
+          parsed.success
+            ? new ApiError(xhr.status, parsed.data.error, parsed.data.message)
+            : new ApiError(xhr.status, 'http', `The server answered ${String(xhr.status)}.`),
+        )
+      }
+      xhr.onerror = () => {
+        reject(new Error('The upload broke off. Check the connection and try again.'))
+      }
+      xhr.send(file)
+    })
+  try {
+    return schema.parse(await once())
+  } catch (e) {
+    if (e instanceof ApiError && e.kind === 'step_up' && stepUpHandler && (await stepUpHandler())) {
+      return schema.parse(await once())
+    }
+    throw e
+  }
+}
+
 /** Sends a request whose answer has no body. */
 export async function requestNoContent(method: string, path: string, body?: unknown) {
   await send(method, path, body)

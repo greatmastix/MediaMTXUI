@@ -40,11 +40,11 @@ Under **Your own picture or video**, click **Choose a file** and pick a picture 
 - **A picture** becomes a short clip (four seconds of the picture with silence, on repeat) in the stream's format.
   The picture is shown whole, centred on black.
 - **A video** is, with **Transcode videos here** ticked (the default), converted in your browser to fit: H.264 in
-  the stream's format with the right audio. This takes about as long as playing the video, and only the first two
-  minutes are used. A video without sound gets silence.
+  the stream's format with the right audio. This takes about as long as playing the video, and only the first hour
+  is used. A video without sound gets silence.
 - **Untick Transcode videos here** to upload a video that already fits as it is: an MP4 (not a fragmented one) with
   H.264 video in the stream's format and no B-frames, AAC-LC audio at 48 kHz stereo (or Opus stereo for WHIP),
-  at most 64 MB and at most an hour long. If it does not fit, the page says what is wrong and offers **Transcode it
+  at most 3.9 GB and at most an hour long. If it does not fit, the page says what is wrong and offers **Transcode it
   here and upload**.
 
 The page shows its progress ("Transcoding the RTMP version (AAC)... 40 %", then "Uploading ..."). When it is done,
@@ -53,6 +53,20 @@ the holding screen switches to **My own clip**.
 The conversion happens in your browser, not on the server, using the browser's built-in video encoders (WebCodecs).
 Chrome and Edge can do it. If a browser cannot, the page says so, for example "This browser cannot encode video (it
 has no WebCodecs). Use Chrome or Edge."
+
+### A stretch of a recording
+
+A stream that is recorded can use part of its recording as the holding screen, for a replay or a loop of the last
+show:
+
+1. Open **Recordings**, then the stream, and select the stretch on the timeline (at most an hour). Its first and last
+   frame show under it.
+2. Press **Use as holding screen**. The stream's page opens with the stretch under **Holding screen**, "From the
+   recording: ...".
+3. Press **Make it the holding screen**. The page fetches the stretch, transcodes it into the stream's format and
+   audio, and uploads both versions, showing its progress, as with a video you choose. **Not now** leaves it.
+
+The button shows for streams you manage. It needs a browser that can encode video (Chrome or Edge).
 
 ### Two versions of your clip
 
@@ -113,8 +127,17 @@ VLC) may need a moment or a restart." Click **Change it anyway** or **Cancel**.
 
 ## Limits
 
-- An uploaded clip is at most 64 MB (64 MiB) and at most an hour long; the upload may take up to 10 minutes.
-- A video transcoded in the browser is cut to its first two minutes.
+- An uploaded clip is at most 3.9 GB and at most an hour long. Change the size with `MTXUI_HOLDING_MAX_GB` (0.01 to
+  3.9) in a `compose.override.yaml`; MediaMTX cannot read an MP4 of 4 GB or more. The upload may take as long as it
+  keeps arriving (it is cut off when nothing arrives for 2 minutes), and the page shows how far it is.
+- Storing a clip needs twice its size free on the server for a moment, without going below the free space at which
+  recording is switched off (`MTXUI_RECORDINGS_CRITICAL_FREE_GB`, 5 GB): otherwise the page says how much is free.
+- A video transcoded in the browser is cut to its first hour. A long one takes about as long to make as to play, and
+  then to upload. Chrome and Edge keep it on your computer's disk meanwhile, not in memory.
+- **Long clips slow MediaMTX down a little.** It reads a clip whole whenever it loads its configuration and whenever
+  the stream starts, about 5 seconds for each hour of clip (at 50 fps). Saving a setting takes that much longer while
+  an hour-long clip is up, and the stream takes that long to come back after a holding change.
+- Backups carry holding clips up to 64 MB; larger ones are left out (see [Backups](backups.md#what-a-backup-contains)).
 - One upload per stream at a time.
 - Clips must not have B-frames, since browsers could not play them over WebRTC. Transcoding in the browser takes care
   of that.

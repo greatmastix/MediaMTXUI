@@ -13,6 +13,7 @@ import { z } from 'zod'
 
 import { sessionQuery, setupQuery } from '@/api/sidecar'
 import { AppShell } from '@/components/AppShell'
+import { holdingClipMaxSeconds } from '@/lib/holdingLimits'
 import { modeFor } from '@/lib/mode'
 import { protocolById, protocols } from '@/lib/protocols'
 import { keyField, type ListKind } from '@/live/store'
@@ -155,9 +156,35 @@ const StreamPage = lazyRouteComponent(() => import('@/pages/StreamPage'), 'Strea
 const streamRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/streams/$id',
+  // clipFrom and clipSeconds: a stretch of the stream's recordings to offer as its holding clip (the recording page's
+  // "Use as holding screen"); dropped once used or turned down.
+  validateSearch: z.object({
+    clipFrom: z.iso.datetime({ offset: true }).optional().catch(undefined),
+    clipSeconds: z.coerce
+      .number()
+      .positive()
+      .max(holdingClipMaxSeconds)
+      .optional()
+      .catch(undefined),
+  }),
   component: function Stream() {
     const id = Number(streamRoute.useParams().id)
-    return <StreamPage key={id} id={Number.isInteger(id) && id > 0 ? id : 0} />
+    const { clipFrom, clipSeconds } = streamRoute.useSearch()
+    const navigate = streamRoute.useNavigate()
+    const from =
+      clipFrom !== undefined && clipSeconds !== undefined
+        ? { start: new Date(clipFrom), seconds: clipSeconds }
+        : undefined
+    return (
+      <StreamPage
+        key={id}
+        id={Number.isInteger(id) && id > 0 ? id : 0}
+        fromRecording={from}
+        onFromRecordingDone={() => {
+          void navigate({ search: {}, replace: true })
+        }}
+      />
+    )
   },
 })
 

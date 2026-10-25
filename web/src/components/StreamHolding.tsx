@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Clapperboard, Upload } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { ApiError } from '@/api/client'
+import { exportURL } from '@/api/recordings'
 import {
   forwardsQuery,
   streamQuery,
@@ -13,6 +14,8 @@ import {
 } from '@/api/streams'
 import { fieldClass } from '@/components/config/SettingsForm'
 import { Button } from '@/components/ui/button'
+import { formatBytes, formatDuration } from '@/lib/format'
+import { clearScratch, hasScratch, newScratch } from '@/lib/scratch'
 
 // The holding screen (MediaMTX's alwaysAvailable): what viewers see while nobody streams here. Nothing, the offline
 // screen (MediaMTX's "STREAM IS OFFLINE" card; the sidecar has it in every format and audio), or an own clip: a picture
@@ -39,17 +42,74 @@ function errorText(e: unknown, fallback: string) {
   return e instanceof ApiError || e instanceof Error ? e.message : fallback
 }
 
+const clock = (d: Date) =>
+  d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+const day = (d: Date) =>
+  d.toLocaleDateString([], { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })
+
+/**
+ * A stretch of a path's recordings as one MP4, with the bytes so far reported as they arrive: into a scratch file
+ * where the browser keeps files (an hour of recording is gigabytes), else into memory.
+ */
+async function fetchStretch(
+  path: string,
+  start: Date,
+  seconds: number,
+  onBytes: (n: number) => void,
+): Promise<Blob> {
+  const res = await fetch(exportURL(path, start, seconds, 'mp4', false), {
+    credentials: 'same-origin',
+  })
+  if (!res.ok || !res.body) {
+    let message = 'The recording cannot be read.'
+    try {
+      const body = (await res.json()) as { message?: unknown }
+      if (typeof body.message === 'string') message = body.message
+    } catch {
+      // not the server's JSON error: keep the general sentence
+    }
+    throw new Error(message)
+  }
+  let n = 0
+  const counted = res.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, ctl) {
+        n += chunk.byteLength
+        onBytes(n)
+        ctl.enqueue(chunk)
+      },
+    }),
+  )
+  if (hasScratch()) {
+    const file = await newScratch()
+    await counted.pipeTo(await file.createWritable())
+    return file.getFile()
+  }
+  return new Response(counted).blob()
+}
+
+/** A selected stretch of the stream's recordings, offered as its holding clip (from the recording page). */
+export interface StretchFromRecording {
+  start: Date
+  seconds: number
+}
+
 export function Holding({
   stream: s,
   online,
   viewers,
   available,
+  fromRecording,
+  onFromRecordingDone,
 }: {
   stream: Stream
   online: boolean
   viewers: number
   /** Something plays, so this page's own preview is one of the viewers. */
   available: boolean
+  fromRecording?: StretchFromRecording
+  /** The stretch was made the holding clip, or turned down. */
+  onFromRecordingDone?: () => void
 }) {
   const queryClient = useQueryClient()
   // A holding change restarts the stream in MediaMTX (it cannot change the clip on the fly): whoever streams, watches
@@ -101,57 +161,90 @@ export function Holding({
   const progress = (label: string) => (p: number) => {
     setBusy(`${label}… ${String(Math.round(p * 100))} %`)
   }
+  const sent = (version: string) => (n: number, total: number) => {
+    setBusy(
+      `Uploading the ${version}… ${formatBytes(n)} of ${formatBytes(total)} (${String(Math.round((n / Math.max(total, 1)) * 100))} %)`,
+    )
+  }
 
   /**
-   * An own picture or video, in the wanted format: the version for the wanted audio first, then the other one (the
-   * video copied, only the sound encoded again), so switching between RTMP and WHIP needs no new upload.
+   * An own clip, in the wanted format: the version for the wanted audio first, then the other one (the video copied,
+   * only the sound encoded again), so switching between RTMP and WHIP needs no new upload. A picture is made into a
+   * clip; a video is transcoded when asked to, or uploaded as it is. The source may be fetched first (a recording).
    */
-  const takeFile = (file: File, forceTranscode: boolean) => {
-    const image = file.type.startsWith('image/')
+  const take = (
+    source: Blob | (() => Promise<Blob>),
+    { image, transcode, onMisfit }: { image: boolean; transcode: boolean; onMisfit?: () => void },
+  ) => {
     const other: Audio = audio === 'aac' ? 'opus' : 'aac'
     setNotice(null)
-    void run(
-      async () => {
-        let clip: Blob = file
-        setBusy('Getting the encoder ready…')
-        const lib = await import('@/lib/holdingClip')
-        if (image || forceTranscode) {
-          const why = await lib.cannotEncode(audio, format)
-          if (why) throw new Error(why)
-          clip = image
-            ? await lib.clipFromImage(
-                file,
-                audio,
-                format,
-                progress(`Making the ${versionName[audio]}`),
-              )
-            : await lib.transcodeClip(
-                file,
-                audio,
-                format,
-                progress(`Transcoding the ${versionName[audio]}`),
-              )
-        }
-        setBusy(`Uploading the ${versionName[audio]}…`)
-        saved(await uploadHoldingClip(s.id, clip, { audio, format }))
-        const why = await lib.cannotEncodeAudio(other)
-        if (why) {
-          setNotice(`Only the ${versionName[audio]} is stored. ${why}`)
-          return queryClient.getQueryData(streamQuery(s.id).queryKey) ?? s
-        }
-        const second = await lib.withAudio(
-          clip,
-          other,
-          progress(`Making the ${versionName[other]}`),
-        )
-        setBusy(`Uploading the ${versionName[other]}…`)
-        return uploadHoldingClip(s.id, second, { audio: other, format })
-      },
-      () => {
-        if (!image) setMisfit(file)
-      },
-    ).then((ok) => {
+    return run(async () => {
+      let clip: Blob = typeof source === 'function' ? await source() : source
+      setBusy('Getting the encoder ready…')
+      const lib = await import('@/lib/holdingClip')
+      if (image || transcode) {
+        const why = await lib.cannotEncode(audio, format)
+        if (why) throw new Error(why)
+        clip = image
+          ? await lib.clipFromImage(
+              clip,
+              audio,
+              format,
+              progress(`Making the ${versionName[audio]}`),
+            )
+          : await lib.transcodeClip(
+              clip,
+              audio,
+              format,
+              progress(`Transcoding the ${versionName[audio]}`),
+              s.holdingMaxBytes,
+            )
+      }
+      setBusy(`Uploading the ${versionName[audio]}…`)
+      saved(await uploadHoldingClip(s.id, clip, { audio, format }, sent(versionName[audio])))
+      const why = await lib.cannotEncodeAudio(other)
+      if (why) {
+        setNotice(`Only the ${versionName[audio]} is stored. ${why}`)
+        return queryClient.getQueryData(streamQuery(s.id).queryKey) ?? s
+      }
+      const second = await lib.withAudio(clip, other, progress(`Making the ${versionName[other]}`))
+      setBusy(`Uploading the ${versionName[other]}…`)
+      return uploadHoldingClip(s.id, second, { audio: other, format }, sent(versionName[other]))
+    }, onMisfit).then((ok) => {
+      void clearScratch()
       if (ok) setWanted(null)
+      return ok
+    })
+  }
+
+  const takeFile = (file: File, forceTranscode: boolean) => {
+    const image = file.type.startsWith('image/')
+    void take(file, {
+      image,
+      transcode: forceTranscode,
+      onMisfit: image
+        ? undefined
+        : () => {
+            setMisfit(file)
+          },
+    })
+  }
+
+  /** A stretch of this stream's recordings, fetched as an MP4 (as Download MP4 does) and transcoded like a video. */
+  const takeRecording = (from: { start: Date; seconds: number }) => {
+    void take(
+      async () => {
+        setBusy('Fetching the stretch from the recording…')
+        return fetchStretch(s.name, from.start, from.seconds, (bytes) => {
+          setBusy(`Fetching the stretch from the recording… ${formatBytes(bytes)}`)
+        })
+      },
+      { image: false, transcode: true },
+    ).then((ok) => {
+      if (ok) {
+        setNotice((n) => n ?? 'The stretch from the recording is your holding clip now.')
+        onFromRecordingDone?.()
+      }
     })
   }
 
@@ -181,6 +274,16 @@ export function Holding({
     }
   }
 
+  // Coming from the recording page, the offer is what this visit is for: it is scrolled into view.
+  const fromRef = useRef<HTMLDivElement>(null)
+  const fromAt = fromRecording?.start.getTime()
+  useEffect(() => {
+    const el = fromRef.current
+    if (fromAt !== undefined && el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'center' })
+    }
+  }, [fromAt])
+
   const disabled = busy !== null
   return (
     <section className="space-y-3 rounded-xl border bg-card p-4" aria-labelledby="holding-title">
@@ -192,6 +295,48 @@ export function Holding({
         Players stay connected, and your encoder takes over when it connects. Forwarding to other
         platforms shows it too.
       </p>
+      {fromRecording && (
+        <div
+          ref={fromRef}
+          role="group"
+          aria-label="Stretch from the recording"
+          className="space-y-2 rounded-lg border border-signal/50 p-3 text-sm"
+          data-testid="holding-from-recording"
+        >
+          <p>
+            <span className="font-medium">From the recording:</span> {day(fromRecording.start)}{' '}
+            {clock(fromRecording.start)} –{' '}
+            {clock(new Date(fromRecording.start.getTime() + fromRecording.seconds * 1000))} (
+            {formatDuration(fromRecording.seconds)}).
+          </p>
+          <p className="text-xs text-muted-foreground">
+            It is transcoded here into {format} with {audio === 'aac' ? 'AAC' : 'Opus'}, as a video
+            you choose below would be, and becomes your own clip, played on repeat while nobody
+            streams. This needs Chrome or Edge and takes about as long as playing it.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              disabled={disabled}
+              onClick={() => {
+                guard('Putting up the clip from the recording', () => {
+                  takeRecording(fromRecording)
+                })
+              }}
+            >
+              Make it the holding screen
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={disabled}
+              onClick={() => onFromRecordingDone?.()}
+            >
+              Not now
+            </Button>
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="space-y-1 text-sm">
@@ -332,7 +477,9 @@ export function Holding({
         <p className="text-xs text-muted-foreground">
           A picture becomes a short clip in {format}. A video goes up as it is if it is already
           H.264 in {format} with {audio === 'aac' ? 'AAC-LC 48 kHz stereo' : 'Opus stereo'} audio
-          (at most 64 MB); otherwise it is transcoded here, two minutes at most.
+          (at most {s.holdingMaxBytes ? formatBytes(s.holdingMaxBytes) : 'the server’s limit'} and
+          an hour); otherwise it is transcoded here, an hour at most. A long clip takes a while to
+          make and to upload, and MediaMTX needs a few seconds more to start it, about 5 s an hour.
         </p>
       </div>
 

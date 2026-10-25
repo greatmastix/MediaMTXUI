@@ -29,6 +29,7 @@ The sidecar reads these environment variables. `compose.yaml` sets the ones an i
 | `MTXUI_EXPORT_MAX_DURATION` | `2h` | Longest range one recording export may cover (1m to 24h). |
 | `MTXUI_EXPORT_MAX_GB` | `8` | Largest recording export in GB: the download stops there. |
 | `MTXUI_EXPORT_CONCURRENCY` | `2` | Recording exports running at once (1 to 16); more are refused until one ends. An export holds its slot at most twice its range plus a minute, however slowly the client reads. |
+| `MTXUI_HOLDING_MAX_GB` | `3.9` | Largest holding clip a stream may upload, in GB (0.01 to 3.9: MediaMTX reads no MP4 of 4 GB or more). The server needs twice that free while it stores one. |
 | `MTXUI_PASSKEYS` | `auto` | Passkeys (WebAuthn sign-in): `auto` offers them when MTXUI_PUBLIC_URL is HTTPS or localhost (browsers allow them only there; the relying party is its host), `on` (needs a domain name or localhost there, not an IP address) or `off`. |
 | `MTXUI_MEDIAMTX_BIN` | `/usr/libexec/mtxui/mediamtx` | The MediaMTX binary the image carries, used only to run `--validate-conf` on every config before it is written. |
 | `MTXUI_MEDIAMTX_LOG_MAX_MB` | `20` | MediaMTX's log file is rotated (copy-truncate, gzipped) when it grows past this many MB (1 to 1024). |

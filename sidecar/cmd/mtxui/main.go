@@ -112,6 +112,7 @@ type core struct {
 	creds     *credentials.Service
 	writer    *mtxconf.Writer
 	validator mtxconf.Validator
+	clips     *app.HoldingClips // read uploaded holding clips: the config check's stand-ins, the read-back's allowance
 	setup     *setup.Service
 	hasher    *auth.Hasher
 	audit     *audit.Recorder
@@ -144,9 +145,11 @@ func open(ctx context.Context, cfg *settings.Settings, log *slog.Logger) (*core,
 		_ = st.Close()
 		return nil, err
 	}
+	clips := app.NewHoldingClips(cfg.HoldingDir, log)
 	c := &core{
-		cfg: cfg, store: st, creds: credentials.New(st, key), validator: mtxconf.Validator{Bin: cfg.MediaMTXBin},
-		hasher: auth.NewHasher(auth.DefaultParams, 2), audit: audit.NewRecorder(st, log), subnetSure: subnetSure,
+		cfg: cfg, store: st, creds: credentials.New(st, key), clips: clips,
+		validator: mtxconf.Validator{Bin: cfg.MediaMTXBin, StandIn: clips.StandIn},
+		hasher:    auth.NewHasher(auth.DefaultParams, 2), audit: audit.NewRecorder(st, log), subnetSure: subnetSure,
 	}
 	c.writer = &mtxconf.Writer{
 		Path: cfg.ConfigFile(), LockPath: filepath.Join(cfg.StateDir(), "config.lock"),
@@ -252,7 +255,8 @@ func start(ctx context.Context, cfg *settings.Settings, log *slog.Logger, logHub
 	}
 	// UI edits are read back from MediaMTX after they are written, and undone if MediaMTX stops answering.
 	mtxAPI := &mtxconf.APIClient{Base: cfg.MediaMTXURL(settings.MediaMTXAPIPort), Principal: principal}
-	c.writer.Verifier = &mtxconf.Verifier{API: mtxAPI}
+	c.writer.Verifier = &mtxconf.Verifier{API: mtxAPI, Allowance: c.clips.Allowance}
+	go c.clips.CheckAll(ctx) // until a clip is read, config checks read it themselves
 	mtxAuth := mtxauth.NewHandler(principal, c.creds, log)
 	notes := mtxlog.New() // what MediaMTX's log says about encoders, for the stream pages
 	c.writer.MinGap = mtxconf.ReloadGap
@@ -285,7 +289,7 @@ func start(ctx context.Context, cfg *settings.Settings, log *slog.Logger, logHub
 		Kicker: mtxAPI, MTX: mtxAPI, Notes: notes, Logs: logHub,
 		Playback: &mtxconf.APIClient{Base: cfg.MediaMTXURL(settings.MediaMTXPlaybackPort), Principal: principal}, Watch: liveproxy.New(cfg.MediaMTXURL(8888), cfg.MediaMTXURL(8889), mtxAuth.Viewers),
 		Exposure: exposure, Proxy: prox, MTXAuth: mtxAuth,
-		UI: webui.Handler(), Log: log, Restart: restart,
+		UI: webui.Handler(), Log: log, Restart: restart, HoldingClips: c.clips,
 	})
 
 	mtxAuth.Public = srv.IsPublicPath                                 // anyone may read a public stream

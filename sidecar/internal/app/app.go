@@ -56,6 +56,8 @@ type Deps struct {
 	UI       http.Handler     // the embedded single-page app
 	Restart  func()           // ends the process so it starts again (a restore); the container's restart policy brings it back
 	Log      *slog.Logger
+	// HoldingClips knows the uploaded holding clips the sidecar has read (optional: tests may leave it out).
+	HoldingClips *HoldingClips
 }
 
 // MTXAPI reads MediaMTX's Control API and deletes recordings through it.

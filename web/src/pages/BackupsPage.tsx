@@ -70,10 +70,10 @@ export function BackupsPage() {
         </h1>
         <p className="text-sm text-muted-foreground">
           Everything needed to set this server up again: people, streams and their keys, the
-          configuration and its history, holding clips, the charts&apos; history and the audit log.
-          Not the recordings. Backups are encrypted: only the passphrase opens them, so keep it
-          somewhere safe. They are kept in <code>backups/</code> on the server; download one now and
-          then to keep a copy elsewhere.
+          configuration and its history, holding clips up to 64 MB, the charts&apos; history and the
+          audit log. Not the recordings, nor larger holding clips. Backups are encrypted: only the
+          passphrase opens them, so keep it somewhere safe. They are kept in <code>backups/</code>{' '}
+          on the server; download one now and then to keep a copy elsewhere.
         </p>
       </div>
       {backups.error ? (
@@ -381,6 +381,14 @@ function BackupList({ data }: { data: Backups }) {
                   </TableCell>
                   <TableCell className="hidden tabular-nums sm:table-cell">
                     {formatBytes(b.size)}
+                    {b.leftOutClips ? (
+                      <span
+                        className="block text-xs text-muted-foreground"
+                        data-testid="backup-left-out"
+                      >
+                        without {b.leftOutClips} large holding clip{b.leftOutClips === 1 ? '' : 's'}
+                      </span>
+                    ) : null}
                   </TableCell>
                   <TableCell className="hidden text-muted-foreground md:table-cell">
                     {b.host || '–'} {b.version && `(${b.version})`}
@@ -529,6 +537,13 @@ function Preview({
           {p.database.credentials} stream credentials, {p.database.snapshots} configuration
           versions, {p.clips} holding clips
         </li>
+        {(p.missingClips ?? []).length > 0 && (
+          <li data-testid="preview-missing-clips">
+            Holding clips too large for backups, and not on this server:{' '}
+            {(p.missingClips ?? []).map((n) => n || 'the path defaults').join(', ')}. These streams
+            show the offline screen after the restore; upload their clips again.
+          </li>
+        )}
         <li>
           {p.configChanges
             ? 'mediamtx.yml changes: paths whose settings differ restart, which drops their viewers for a moment.'

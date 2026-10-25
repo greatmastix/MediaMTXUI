@@ -29,7 +29,7 @@ import { StatusPill } from '@/components/StatusPill'
 import { EncoderNotes } from '@/components/EncoderNotes'
 import { Forwarding } from '@/components/StreamForwarding'
 import { GuestKeys } from '@/components/StreamGuestKeys'
-import { Holding } from '@/components/StreamHolding'
+import { Holding, type StretchFromRecording } from '@/components/StreamHolding'
 import { Guidance, Health } from '@/components/StreamGuidance'
 import { TargetList } from '@/components/TargetList'
 import { RangePicker } from '@/components/RangePicker'
@@ -50,7 +50,16 @@ function errorText(e: unknown, fallback: string) {
   return e instanceof ApiError ? e.message : fallback
 }
 
-export function StreamPage({ id }: { id: number }) {
+export function StreamPage({
+  id,
+  fromRecording,
+  onFromRecordingDone,
+}: {
+  id: number
+  /** A stretch of the stream's recordings to offer as its holding clip (the recording page sends it). */
+  fromRecording?: StretchFromRecording
+  onFromRecordingDone?: () => void
+}) {
   const stream = useQuery(streamQuery(id))
   if (stream.error) {
     return (
@@ -62,10 +71,24 @@ export function StreamPage({ id }: { id: number }) {
     )
   }
   if (!stream.data) return <Skeleton className="h-64 w-full max-w-4xl" />
-  return <StreamView stream={stream.data} />
+  return (
+    <StreamView
+      stream={stream.data}
+      fromRecording={fromRecording}
+      onFromRecordingDone={onFromRecordingDone}
+    />
+  )
 }
 
-function StreamView({ stream: s }: { stream: Stream }) {
+function StreamView({
+  stream: s,
+  fromRecording,
+  onFromRecordingDone,
+}: {
+  stream: Stream
+  fromRecording?: StretchFromRecording
+  onFromRecordingDone?: () => void
+}) {
   const { online, available, viewers, inBps, ratesAt, path } = useStreamLive(s.name)
   const tracks = path?.tracks2 ?? []
   const { data: session } = useQuery(sessionQuery)
@@ -133,7 +156,14 @@ function StreamView({ stream: s }: { stream: Stream }) {
       {s.canManage && <Forwarding stream={s} />}
       {s.canManage && <GuestKeys stream={s} />}
       {s.canManage && (
-        <Holding stream={s} online={online} viewers={viewers} available={available} />
+        <Holding
+          stream={s}
+          online={online}
+          viewers={viewers}
+          available={available}
+          fromRecording={fromRecording}
+          onFromRecordingDone={onFromRecordingDone}
+        />
       )}
       {s.public && <PublicOutputs stream={s} />}
       {s.canManage && <Outputs stream={s} />}

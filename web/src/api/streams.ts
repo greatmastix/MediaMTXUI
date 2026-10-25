@@ -1,7 +1,7 @@
 import { queryOptions } from '@tanstack/react-query'
 import { z } from 'zod'
 
-import { request, requestNoContent } from './client'
+import { request, requestNoContent, upload } from './client'
 import type { HistoryRange } from './history'
 
 // Streams: a MediaMTX path as a page for whoever streams to it. Streamers see their own; viewers
@@ -26,6 +26,8 @@ export const streamSchema = z.object({
   createdAt: z.string(),
   createdBy: z.string(),
   canManage: z.boolean(),
+  /** The largest holding clip the server takes (for those who manage the stream). */
+  holdingMaxBytes: z.number().optional(),
   canAdmin: z.boolean(),
   ingest: z.object({
     host: z.string(),
@@ -118,12 +120,14 @@ export const uploadHoldingClip = (
   id: number,
   clip: Blob,
   made: { audio: Stream['audio']; format: Stream['format'] },
+  onProgress?: (sent: number, total: number) => void,
 ) =>
-  request(
+  upload(
     'PUT',
     `/api/v1/streams/${String(id)}/holding/clip?${new URLSearchParams(made).toString()}`,
     streamSchema,
-    new Blob([clip], { type: 'video/mp4' }),
+    clip.type === 'video/mp4' ? clip : new Blob([clip], { type: 'video/mp4' }),
+    onProgress,
   )
 
 export const deleteStream = (id: number) =>

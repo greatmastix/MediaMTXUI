@@ -13,6 +13,8 @@ export const backupInfoSchema = z.object({
   created: z.string(),
   host: z.string(),
   version: z.string(),
+  /** Holding clips too large for backups (over 64 MiB), left out of this one. */
+  leftOutClips: z.number().optional(),
 })
 export type BackupInfo = z.infer<typeof backupInfoSchema>
 
@@ -37,6 +39,8 @@ export const previewSchema = z.object({
   currentUsers: z.array(z.string()),
   currentStreams: z.array(z.string()),
   clips: z.number(),
+  /** Streams whose holding clip is neither in the backup nor here: they show the offline screen after the restore. */
+  missingClips: z.array(z.string()).nullable().optional(),
   configChanges: z.boolean(),
   expiresAt: z.string(),
 })

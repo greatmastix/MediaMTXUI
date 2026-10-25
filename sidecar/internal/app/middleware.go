@@ -375,6 +375,35 @@ func (b *deadlineBody) lift() {
 	}
 }
 
+// slidingBody gives an upload as long as it keeps arriving: the read deadline moves on to idle from now as data comes
+// in (every quarter of idle at most, and at most once a second), so a large upload on a slow line is not cut off, and
+// one that stalls is. The read that ends the body moves nothing: deadlineBody has lifted the deadline by then.
+func slidingBody(w http.ResponseWriter, body io.ReadCloser, idle time.Duration) io.ReadCloser {
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(idle))
+	b := &sliding{ReadCloser: body, rc: rc, idle: idle, every: min(idle/4, time.Second)}
+	b.next = time.Now().Add(b.every)
+	return b
+}
+
+type sliding struct {
+	io.ReadCloser
+	rc          *http.ResponseController
+	idle, every time.Duration
+	next        time.Time
+}
+
+func (b *sliding) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 && err == nil {
+		if now := time.Now(); now.After(b.next) {
+			_ = b.rc.SetReadDeadline(now.Add(b.idle))
+			b.next = now.Add(b.every)
+		}
+	}
+	return n, err
+}
+
 // extendBodyDeadline gives an upload longer to arrive than bodyReadTimeout.
 func extendBodyDeadline(w http.ResponseWriter, d time.Duration) {
 	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(d))
