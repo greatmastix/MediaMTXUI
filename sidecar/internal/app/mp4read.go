@@ -43,9 +43,6 @@ func (b *bufferedReadSeeker) seekTo(pos int64) error {
 }
 
 func (b *bufferedReadSeeker) Read(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
 	if b.pos >= b.at && b.pos < b.at+int64(b.n) {
 		n := copy(p, b.buf[b.pos-b.at:b.n])
 		b.pos += int64(n)
@@ -64,10 +61,7 @@ func (b *bufferedReadSeeker) Read(p []byte) (int, error) {
 	b.rpos += int64(n)
 	b.at, b.n = b.pos, n
 	if n == 0 {
-		if errors.Is(err, io.ErrUnexpectedEOF) {
-			err = io.EOF
-		}
-		return 0, err
+		return 0, err // io.ReadFull says io.EOF when it read nothing
 	}
 	c := copy(p, b.buf[:n])
 	b.pos += int64(c)
