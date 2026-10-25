@@ -31,6 +31,8 @@ any add-on file you use, such as `compose.lan.yaml`), then `docker compose pull 
   keep their names, so their recordings stay listed; MediaMTX's new warning about it is harmless (see
   [Troubleshooting](docs/troubleshooting.md#harmless-warnings-in-mediamtxs-log)).
 - Release notes come from this file: a release cannot be published without its section here.
+- Storing an uploaded holding clip, and checking the clips at start, read the clip about 10 times faster (0.7 s
+  instead of 7.6 s for an hour of video).
 - **Backups leave out holding clips over 64 MB** (as before, but now they say so). A restore on a server without
   such a clip shows the offline screen on that stream instead of refusing the backup, and its preview names them.
 - Behind a reverse proxy: allow request bodies up to 4 GB for holding clips (the examples in

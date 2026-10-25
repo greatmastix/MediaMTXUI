@@ -144,14 +144,18 @@ func readClip(path string) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := clipLimits(f, fi.Size()); err != nil {
+	r, err := newBufferedReadSeeker(f)
+	if err != nil {
 		return 0, err
 	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
+	if err := clipLimits(r, fi.Size()); err != nil {
+		return 0, err
+	}
+	if _, err := r.Seek(0, io.SeekStart); err != nil {
 		return 0, err
 	}
 	var p pmp4.Presentation
-	if err := p.Unmarshal(f); err != nil {
+	if err := p.Unmarshal(r); err != nil {
 		return 0, notMP4
 	}
 	return presentationSeconds(&p), nil

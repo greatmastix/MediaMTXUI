@@ -282,14 +282,21 @@ func clipLimits(r io.ReadSeeker, size int64) error {
 // directory under a name of its own (so a new clip is a new file, and MediaMTX reloads it). It returns the file name.
 func (s *Server) storeClip(streamID int64, audio, format string, up *os.File, size int64) (string, error) {
 	dir := s.d.Settings.HoldingDir
-	if err := clipLimits(up, size); err != nil {
-		return "", err
-	}
 	if _, err := up.Seek(0, io.SeekStart); err != nil {
 		return "", err
 	}
+	r, err := newBufferedReadSeeker(up)
+	if err != nil {
+		return "", err
+	}
+	if err := clipLimits(r, size); err != nil {
+		return "", err
+	}
+	if _, err := r.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
 	var p pmp4.Presentation
-	if err := p.Unmarshal(up); err != nil {
+	if err := p.Unmarshal(r); err != nil { // its samples are read through r too, when the clip is written below
 		return "", notMP4
 	}
 	if err := fitClip(&p, audio, format); err != nil {
